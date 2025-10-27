@@ -6,7 +6,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	klog "k8s.io/klog/v2"
+	"k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -15,6 +15,9 @@ type MyScheduler struct {
 }
 
 const Name = "MyScheduler"
+
+// var err string
+// var log string
 
 func (m *MyScheduler) Name() string {
 	return Name
@@ -25,20 +28,45 @@ func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plu
 }
 
 func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+
+	// var pLabelExist bool = false
+	var nLabelExist bool = false
+
 	node := nodeInfo.Node()
 
-	// Get pod and node labels
+	nodeName := node.Name
 	podLabels := pod.Labels
 	nodeLabels := node.Labels
 
-	node_hostname, ln_exist := nodeLabels["kubernetes.io/hostname"]
-	pod_hostname, lp_exist := podLabels["kubernetes.io/hostname"]
+	if nodeLabels == nil {
+		return framework.NewStatus(framework.Unschedulable, "No labels in the Node")
+	}
 
-	log := fmt.Sprintf("Pod label: %s \n Node Label: %s ", pod_hostname, node_hostname)
-	klog.V(0).Info(log)
+	// Filter fake pods and kwok nodes
+	if podLabels != nil {
+		podApp, pLabelExist := podLabels["app"]
 
-	if !ln_exist || !lp_exist || node_hostname != pod_hostname {
-		return framework.NewStatus(framework.Unschedulable, "Pod label does not match with node label")
+		if pLabelExist && podApp == "fake-pod" {
+			nodeType, nLabelExist := nodeLabels["type"]
+
+			klog.V(4).Infof("%s type: %s ", nodeName, nodeType)
+
+			if !nLabelExist || nodeType != "kwok" {
+				err := fmt.Sprintf("node %s label 'type': %s ", nodeName, nodeType)
+				return framework.NewStatus(framework.Unschedulable, err)
+			}
+		}
+	}
+
+	// Filter nodes by GPU
+
+	nodeGPU, nLabelExist := nodeLabels["nvidia.com/gpu.present"]
+
+	klog.V(4).Infof("%s nvidia.com/gpu.present: %s ", nodeName, nodeGPU)
+
+	if !nLabelExist || nodeGPU != "true" {
+		err := fmt.Sprintf("node %s label 'nvidia.com/gpu.present': %s ", nodeName, nodeGPU)
+		return framework.NewStatus(framework.Unschedulable, err)
 	}
 
 	return framework.NewStatus(framework.Success)
