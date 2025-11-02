@@ -1,0 +1,1 @@
+docker inspect joelgonzalezjimenez/kube-scheduler:latest | grep Id
