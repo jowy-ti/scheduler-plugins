@@ -3,10 +3,11 @@ package myscheduler
 import (
 	"context"
 	"fmt"
+	"math"
 
 	v1 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
-	klog "k8s.io/klog/v2"
+	"k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -26,6 +27,7 @@ func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plu
 }
 
 var _ framework.PreFilterPlugin = &MyScheduler{}
+var _ framework.FilterPlugin = &MyScheduler{}
 var _ framework.ScorePlugin = &MyScheduler{}
 
 const (
@@ -47,19 +49,7 @@ func (s *PreFilterState) Clone() framework.StateData {
 
 func (m *MyScheduler) PreFilter(ctx context.Context, state *framework.CycleState, pod *v1.Pod) (*framework.PreFilterResult, *framework.Status) {
 
-	state.SetRecordPluginMetrics(true)
-	podLabels := pod.Labels
-
-	if podLabels == nil {
-		return nil, framework.NewStatus(framework.Unschedulable, "No labels in the Pod")
-	}
-
-	podApp, podLabelExist := podLabels["app"]
-
-	// Filtrar fake pods
-	if !podLabelExist || podApp != "fake-pod" {
-		return nil, framework.NewStatus(framework.Unschedulable, "No fake Pod")
-	}
+	// state.SetRecordPluginMetrics(true)
 
 	podResources := computePodResourceRequest(pod)
 
@@ -69,19 +59,47 @@ func (m *MyScheduler) PreFilter(ctx context.Context, state *framework.CycleState
 
 	state.Write(preFilterStateKey, preFilterState)
 
-	// klog.V(0).Infof("nvidia.com/mig-1g.6gb: %d ", podResources.ScalarResources["nvidia.com/mig-1g.6gb"])
-	// klog.V(0).Infof("nvidia.com/mig-2g.12gb: %d ", podResources.ScalarResources["nvidia.com/mig-2g.12gb"])
-	// klog.V(0).Infof("nvidia.com/mig-2g.20gb: %d ", podResources.ScalarResources["nvidia.com/mig-2g.20gb"])
-	// klog.V(0).Infof("nvidia.com/mig-3g.40gb: %d ", podResources.ScalarResources["nvidia.com/mig-3g.40gb"])
-	// klog.V(0).Infof("nvidia.com/mig-2g.35gb: %d ", podResources.ScalarResources["nvidia.com/mig-2g.35gb"])
-	// klog.V(0).Infof("nvidia.com/mig-3g.71gb: %d ", podResources.ScalarResources["nvidia.com/mig-3g.71gb"])
-
 	return nil, framework.NewStatus(framework.Success)
 }
 
 func (m *MyScheduler) PreFilterExtensions() framework.PreFilterExtensions {
 	return nil
 }
+
+//////////////////////////////////////////////////////////////////////////////////
+
+func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
+
+	// Pulling pod requests
+	preFilterState, err := getPreFilterState(state)
+
+	if err != nil {
+		return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
+	}
+
+	podRequests := &preFilterState.resources
+	nodeRequested := nodeInfo.Requested
+	nodeAllocatable := nodeInfo.Allocatable
+
+	resourcesAvailable := subtractionResources(nodeAllocatable, nodeRequested)
+
+	if resourcesAvailable.MilliCPU < podRequests.MilliCPU {
+		return framework.NewStatus(framework.Unschedulable, "Insufficient CPU")
+	}
+
+	if resourcesAvailable.Memory < podRequests.Memory {
+		return framework.NewStatus(framework.Unschedulable, "Insufficient Memory")
+	}
+
+	for resourceName, amount := range podRequests.ScalarResources {
+		if resourcesAvailable.ScalarResources[resourceName] < amount {
+			return framework.NewStatus(framework.Unschedulable, fmt.Sprintf("Insufficient %s", resourceName.String()))
+		}
+	}
+	return framework.NewStatus(framework.Success)
+}
+
+//////////////////////////////////////////////////////////////////////////////////
 
 func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 	nodeInfo, err := m.handle.SnapshotSharedLister().NodeInfos().Get(nodeName)
@@ -90,34 +108,51 @@ func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, po
 		return 0, framework.NewStatus(framework.Error, fmt.Sprintf("getting node %q from Snapshot: %v", nodeName, err))
 	}
 
+	// Pulling pod requests
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
 		return 0, framework.NewStatus(framework.Error, "Failed to read preFilterState from cycleState")
 	}
 
-	podRequests := preFilterState.resources
+	podRequests := &preFilterState.resources
 	nodeRequested := nodeInfo.Requested
 	nodeAllocatable := nodeInfo.Allocatable
 
-	resourcesAvailable := subtractionResources(nodeAllocatable, nodeRequested)
-	resourcesLeft := subtractionResources(resourcesAvailable, &podRequests)
+	// klog.V(0).Infof("%s CPU: %d ", nodeName, resourcesLeft.MilliCPU)
+	// klog.V(0).Infof("%s MEM: %d ", nodeName, resourcesLeft.Memory)
+	// klog.V(0).Infof("%s nvidia.com/mig-1g.6gb: %d ", nodeName, resourcesLeft.ScalarResources["nvidia.com/mig-1g.6gb"])
+	// klog.V(0).Infof("%s nvidia.com/mig-2g.12gb: %d ", nodeName, resourcesLeft.ScalarResources["nvidia.com/mig-2g.12gb"])
 
-	klog.V(0).Infof("%s CPU: %d ", nodeName, resourcesLeft.MilliCPU)
-	klog.V(0).Infof("%s MEM: %d ", nodeName, resourcesLeft.Memory)
-	klog.V(0).Infof("%s nvidia.com/mig-1g.6gb: %d ", nodeName, resourcesLeft.ScalarResources["nvidia.com/mig-1g.6gb"])
-	klog.V(0).Infof("%s nvidia.com/mig-2g.12gb: %d ", nodeName, resourcesLeft.ScalarResources["nvidia.com/mig-2g.12gb"])
+	scoreCpuMem := scoreCpuMem(nodeAllocatable, nodeRequested, podRequests)
+	scoreGpu()
 
-	return 10, framework.NewStatus(framework.Success)
+	klog.V(0).Infof("%s resCpuMem: %f", nodeName, scoreCpuMem)
+
+	return 50, framework.NewStatus(framework.Success)
 }
 
 func (m *MyScheduler) ScoreExtensions() framework.ScoreExtensions {
-	return nil
+	return m
 }
 
-// func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.CycleState, p *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.CycleState, p *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+	// framework.MaxNodeScore
+	var MaxScore int64 = math.MinInt64
 
-// }
+	for _, nodeScore := range scores {
+		if nodeScore.Score > MaxScore {
+			MaxScore = nodeScore.Score
+		}
+	}
+
+	for i, nodeScore := range scores {
+		scores[i].Score = int64(100.0 - (100.0 * (float64(nodeScore.Score) / float64(MaxScore))))
+	}
+	return framework.NewStatus(framework.Success)
+}
+
+//////////////////////////////////////////////////////////////////////////////////
 
 func computePodResourceRequest(pod *v1.Pod) *framework.Resource {
 	result := &framework.Resource{}
@@ -171,33 +206,32 @@ func subtractionResources(Allocatable *framework.Resource, Requested *framework.
 	return result
 }
 
-// func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
-// 	nodeRequested := nodeInfo.Requested
-// 	nodeAllocatable := nodeInfo.Allocatable
+func scoreCpuMem(nodeAllocatable *framework.Resource, nodeRequested *framework.Resource, podRequests *framework.Resource) float64 {
+	var weightMem int64 = 1 << 20
 
-// 	klog.V(0).Infof("%s Utilized: nvidia.com/mig-1g.6gb: %d ", nodeInfo.GetName(), nodeRequested.ScalarResources["nvidia.com/mig-1g.6gb"])
-// 	klog.V(0).Infof("%s Utilized: nvidia.com/mig-2g.12gb: %d ", nodeInfo.GetName(), nodeRequested.ScalarResources["nvidia.com/mig-2g.12gb"])
-// 	klog.V(0).Infof("%s Allocatable: nvidia.com/mig-1g.6gb: %d ", nodeInfo.GetName(), nodeAllocatable.ScalarResources["nvidia.com/mig-1g.6gb"])
-// 	klog.V(0).Infof("%s Allocatable: nvidia.com/mig-2g.12gb: %d ", nodeInfo.GetName(), nodeAllocatable.ScalarResources["nvidia.com/mig-2g.12gb"])
+	// Relative
+	memRel := float64(nodeRequested.Memory+podRequests.Memory) / float64(nodeAllocatable.Memory)
+	cpuRel := float64(nodeRequested.MilliCPU+podRequests.MilliCPU) / float64(nodeAllocatable.MilliCPU)
+	res := memRel - cpuRel
 
-// 	// Pulling pod requests
-// 	stateData, err := state.Read("resources")
+	if res < 0 {
+		res = -1.0 * res
+	}
 
-// 	if err != nil {
-// 		return framework.NewStatus(framework.Unschedulable, "Error getting resources")
-// 	}
+	balanceCpuMem := 1.0 - (res / 2.0)
 
-// 	podResources, ok := stateData.(*PreFilterState)
+	// Absolute
+	resourcesAvailable := subtractionResources(nodeAllocatable, nodeRequested)
 
-// 	if !ok {
-// 		return framework.NewStatus(framework.Unschedulable, "Error getting resources 2")
-// 	}
+	memRes := resourcesAvailable.Memory / weightMem
+	weightedCpuMem := memRes + resourcesAvailable.MilliCPU
 
-// 	klog.V(0).Infof("%s Requests: nvidia.com/mig-1g.6gb: %d ", pod.Name, podResources.resources.ScalarResources["nvidia.com/mig-1g.6gb"])
-// 	klog.V(0).Infof("%s Requests: nvidia.com/mig-2g.12gb: %d ", pod.Name, podResources.resources.ScalarResources["nvidia.com/mig-2g.12gb"])
+	// Result
+	resCpuMem := float64(weightedCpuMem) * float64(balanceCpuMem)
 
-// 	// for resource, amount := range podResources.resources.ScalarResources {
+	return resCpuMem
+}
 
-// 	// }
-// 	return framework.NewStatus(framework.Success)
-// }
+func scoreGpu() float64 {
+
+}
