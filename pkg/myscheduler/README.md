@@ -42,3 +42,12 @@ func (m *MyScheduler) Name() string
 
 Warning:
 la imagen para compilar el plugin del scheduler tiene que ser bookworm (debian)
+
+
+
+
+
+
+
+
+myoldscheduler.go funciona con la nomenclatura normal de NVIDIA y MIG.

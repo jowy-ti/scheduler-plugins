@@ -10,11 +10,6 @@ import (
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
-type allGpus struct {
-	nodes map[string][]gpuSpec
-	mu    sync.RWMutex
-}
-
 type gpuSpec struct {
 	available int // sobre 10
 	mig       bool
@@ -32,7 +27,7 @@ type migPartition struct {
 
 const (
 	migEnabled         string = "mig-enabled"
-	migInstances       string = "mig-instances"
+	migInstances       string = "migInstances"
 	gpuResourceName    string = "nvidia.com/gpu"
 	maxAvailabilityGpu int    = 10
 	gpuMemory          string = "nvidia.com/gpu.memory"
@@ -49,22 +44,22 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 	var gpuCount int64 = nodeInfo.Allocatable.ScalarResources[v1.ResourceName(gpuResourceName)]
 
 	mig, ok := nodeLabels[migEnabled]
+
 	if !ok {
 		return fmt.Errorf("label %s not found in node %s", migEnabled, nodeName)
 	}
 
-	var gpus []gpuSpec = make([]gpuSpec, gpuCount)
+	nodeGpus[nodeName] = make([]gpuSpec, 0, gpuCount)
 
 	if mig == "false" {
-
-		for i := int64(0); gpuCount > i; i++ {
-			gpus[i] = gpuSpec{
-				available: maxAvailabilityGpu,
-				mig:       false,
-				mu:        sync.RWMutex{},
-			}
+		var infoGpu gpuSpec = gpuSpec{
+			available: maxAvailabilityGpu,
+			mig:       false,
 		}
 
+		for i := int64(0); gpuCount > i; i++ {
+			nodeGpus[nodeName][i] = infoGpu
+		}
 	} else {
 
 		labelMemoryGpu, ok := nodeLabels[gpuMemory]
@@ -87,65 +82,46 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 			return fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
 		}
 
-		var migGeometry []migPartition = make([]migPartition, numInstances)
+		var migGeometry []migPartition = make([]migPartition, 0, numInstances)
 
-		for i := int64(0); numInstances > i; i++ {
+		for i := 0; int(numInstances) > i; i++ {
 			migGeometry[i] = migPartition{
 				available: maxAvailabilityGpu,
 				size:      1,
 				mem:       MemoryGpu / numInstances,
-				mu:        sync.RWMutex{},
 			}
 		}
 
 		for i := int64(0); gpuCount > i; i++ {
-			var clonedMigSlices []migPartition = make([]migPartition, numInstances)
-			copy(clonedMigSlices, migGeometry)
-
-			gpus[i] = gpuSpec{
+			nodeGpus[nodeName][i] = gpuSpec{
 				mig:       true,
-				migSlices: clonedMigSlices,
-				mu:        sync.RWMutex{},
+				migSlices: migGeometry,
 			}
 		}
 	}
-
-	nodeGpus.mu.Lock()
-	defer nodeGpus.mu.Unlock()
-	nodeGpus.nodes[nodeName] = gpus
 
 	return nil
 }
 
 // Debugar informacion del nodo en cache
 func scanNode(nodeName string) {
-	nodeGpus.mu.RLock()
-	defer nodeGpus.mu.RUnlock()
-
-	gpuLenght := len(nodeGpus.nodes[nodeName])
+	gpuLenght := len(nodeGpus[nodeName])
 	klog.V(0).Infof("gpuLenght: %d", gpuLenght)
 
 	for i := 0; gpuLenght > i; i++ {
-		nodeGpus.nodes[nodeName][i].mu.RLock()
-
 		klog.V(0).Infof("gpu%d info:", i)
-		klog.V(0).Infof("available: %d", nodeGpus.nodes[nodeName][i].available)
-		mig := nodeGpus.nodes[nodeName][i].mig
+		klog.V(0).Infof("available: %d", nodeGpus[nodeName][i].available)
+		mig := nodeGpus[nodeName][i].mig
 		klog.V(0).Infof("mig: %t", mig)
 		if mig {
-			migLength := len(nodeGpus.nodes[nodeName][i].migSlices)
+			migLength := len(nodeGpus[nodeName][i].migSlices)
 			for j := 0; migLength > j; j++ {
-				nodeGpus.nodes[nodeName][i].migSlices[j].mu.RLock()
-
 				klog.V(0).Info("mig slice info:")
-				klog.V(0).Infof("available: %d", nodeGpus.nodes[nodeName][i].migSlices[j].available)
-				klog.V(0).Infof("size: %d", nodeGpus.nodes[nodeName][i].migSlices[j].size)
-				klog.V(0).Infof("mem: %d", nodeGpus.nodes[nodeName][i].migSlices[j].mem)
-
-				nodeGpus.nodes[nodeName][i].migSlices[j].mu.RUnlock()
+				klog.V(0).Infof("available: %d", nodeGpus[nodeName][i].migSlices[j].available)
+				klog.V(0).Infof("size: %d", nodeGpus[nodeName][i].migSlices[j].size)
+				klog.V(0).Infof("mem: %d", nodeGpus[nodeName][i].migSlices[j].mem)
 			}
 		}
-		nodeGpus.nodes[nodeName][i].mu.RUnlock()
 	}
 
 }
