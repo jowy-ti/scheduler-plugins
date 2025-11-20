@@ -10,35 +10,122 @@ import (
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
-type allGpus struct {
-	nodes map[string][]gpuSpec
-	mu    sync.RWMutex
+// Mapa del uso de recursos de los pods
+type allGpuUsage struct {
+	sync.RWMutex
+	pods map[string]nodeAssignedPod
 }
 
+// Nodo asignado al pod y info de utilización de gpu
+type nodeAssignedPod struct {
+	nodeName    string
+	mig         bool
+	gpuPosition int
+	migPosition int
+	migUsage    int
+	gpuUsage    int
+}
+
+// Mapa con la disponibilidad de GPU de los nodos
+type allNodesGpus struct {
+	sync.RWMutex
+	nodes map[string][]gpuSpec
+}
+
+// Informacion de GPU
 type gpuSpec struct {
+	sync.RWMutex
 	available int // sobre 10
 	mig       bool
 	migSlices []migPartition
-	mu        sync.RWMutex
 }
 
+// Informacion de la particion de MIG
 type migPartition struct {
+	sync.RWMutex
 	available int
 	size      int
 	mem       int64
-	mu        sync.RWMutex
-	// sm        int
 }
 
 const (
-	migEnabled         string = "mig-enabled"
-	migInstances       string = "mig-instances"
-	gpuResourceName    string = "nvidia.com/gpu"
-	maxAvailabilityGpu int    = 10
-	gpuMemory          string = "nvidia.com/gpu.memory"
+	migEnabled          string = "mig-enabled"
+	migInstances        string = "mig-instances"
+	gpuResourceName     string = "nvidia.com/gpu"
+	maxAvailabilityGpu  int    = 10
+	gpuMemory           string = "nvidia.com/gpu.memory"
+	filterPodLabel      string = "app"
+	filterPodLabelValue string = "fake-pod"
 )
 
 // Funciones auxiliares
+
+// onDelete
+
+func onDelete(obj interface{}) {
+	pod, ok := obj.(*v1.Pod)
+
+	if !ok {
+		return
+	}
+
+	var podName string = pod.Name
+
+	// podsUsage.RLock()
+	// info, exists := podsUsage.pods[podName]
+	// podsUsage.RUnlock()
+	podsUsage.RLock()
+	var usage int = podsUsage.pods[podName].gpuUsage
+	var position int = podsUsage.pods[podName].gpuPosition
+	var nodeName string = podsUsage.pods[podName].nodeName
+	podsUsage.RUnlock()
+
+	// nodeGpus.Lock()
+	// defer nodeGpus.Unlock()
+
+	// nodeGpusSlice, ok := nodeGpus.nodes[info.nodeName]
+	// if !ok || info.gpuPosition < 0 || info.gpuPosition >= len(nodeGpusSlice) {
+	//     klog.Errorf("onDelete: Nodo %s o posición %d inválida. No se pudo liberar el recurso.", info.nodeName, info.gpuPosition)
+	//     return
+	// }
+
+	// // 🚨 Obtener el Lock de ESCRITURA de la GPU específica
+	// gpuSpec := &nodeGpusSlice[info.gpuPosition]
+	// gpuSpec.Lock()
+	// defer gpuSpec.Unlock() // Se liberará al salir de la función
+
+	// klog.V(0).Infof("onDelete: PodUsage: %d    NodeAvailable: %d", info.gpuUsage, gpuSpec.available)
+
+	// // Liberación del recurso
+	// gpuSpec.available += info.gpuUsage
+
+	// klog.V(0).Infof("onDelete: NodeAvailablePostDelete: %d", gpuSpec.available)
+
+	// // 4. (Opcional) Eliminar entrada de podsUsage si no se hace en otro sitio.
+	// // Aunque ya liberamos los recursos, si quieres mantener consistencia:
+	// podsUsage.Lock()
+	// delete(podsUsage.pods, podName)
+	// podsUsage.Unlock()
+	nodeGpus.Lock()
+	klog.V(0).Infof("+++++++++onDelete: PodUsage: %d    NodeAvailable: %d", usage, nodeGpus.nodes[nodeName][position].available)
+	nodeGpus.nodes[nodeName][position].available += usage
+	klog.V(0).Infof("+++++++++onDelete: NodeAvailablePostDelete: %d", nodeGpus.nodes[nodeName][position].available)
+	nodeGpus.Unlock()
+}
+
+// FilterFunc
+
+func filterFunc(obj interface{}) bool {
+	pod, ok := obj.(*v1.Pod)
+
+	if !ok {
+		return false
+	}
+
+	var podLabels map[string]string = pod.Labels
+
+	return podLabels[filterPodLabel] == filterPodLabelValue
+}
 
 // Construccion de la estructura de datos en cache de los nodos
 
@@ -61,7 +148,6 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 			gpus[i] = gpuSpec{
 				available: maxAvailabilityGpu,
 				mig:       false,
-				mu:        sync.RWMutex{},
 			}
 		}
 
@@ -94,7 +180,6 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 				available: maxAvailabilityGpu,
 				size:      1,
 				mem:       MemoryGpu / numInstances,
-				mu:        sync.RWMutex{},
 			}
 		}
 
@@ -105,49 +190,53 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 			gpus[i] = gpuSpec{
 				mig:       true,
 				migSlices: clonedMigSlices,
-				mu:        sync.RWMutex{},
 			}
 		}
 	}
 
-	nodeGpus.mu.Lock()
-	defer nodeGpus.mu.Unlock()
+	nodeGpus.Lock()
 	nodeGpus.nodes[nodeName] = gpus
+	nodeGpus.Unlock()
 
 	return nil
 }
 
 // Debugar informacion del nodo en cache
 func scanNode(nodeName string) {
-	nodeGpus.mu.RLock()
-	defer nodeGpus.mu.RUnlock()
 
-	gpuLenght := len(nodeGpus.nodes[nodeName])
+	nodeGpus.RLock()
+	var nodeGpusCopy []gpuSpec = nodeGpus.nodes[nodeName]
+	nodeGpus.RUnlock()
+
+	gpuLenght := len(nodeGpusCopy)
 	klog.V(0).Infof("gpuLenght: %d", gpuLenght)
 
 	for i := 0; gpuLenght > i; i++ {
-		nodeGpus.nodes[nodeName][i].mu.RLock()
+		var gpu *gpuSpec = &nodeGpusCopy[i]
+		gpu.RLock()
 
 		klog.V(0).Infof("gpu%d info:", i)
-		klog.V(0).Infof("available: %d", nodeGpus.nodes[nodeName][i].available)
-		mig := nodeGpus.nodes[nodeName][i].mig
-		klog.V(0).Infof("mig: %t", mig)
+		klog.V(0).Infof("- available: %d", gpu.available)
+		mig := gpu.mig
+
+		var migSlices []migPartition = gpu.migSlices
+		gpu.RUnlock()
+		// klog.V(0).Infof("- mig: %t", mig)
 		if mig {
-			migLength := len(nodeGpus.nodes[nodeName][i].migSlices)
+			migLength := len(migSlices)
 			for j := 0; migLength > j; j++ {
-				nodeGpus.nodes[nodeName][i].migSlices[j].mu.RLock()
+				var migSlice *migPartition = &migSlices[j]
+				migSlice.RLock()
 
 				klog.V(0).Info("mig slice info:")
-				klog.V(0).Infof("available: %d", nodeGpus.nodes[nodeName][i].migSlices[j].available)
-				klog.V(0).Infof("size: %d", nodeGpus.nodes[nodeName][i].migSlices[j].size)
-				klog.V(0).Infof("mem: %d", nodeGpus.nodes[nodeName][i].migSlices[j].mem)
+				klog.V(0).Infof("- available: %d", migSlice.available)
+				klog.V(0).Infof("- size: %d", migSlice.size)
+				klog.V(0).Infof("- mem: %d", migSlice.mem)
 
-				nodeGpus.nodes[nodeName][i].migSlices[j].mu.RUnlock()
+				migSlice.RUnlock()
 			}
 		}
-		nodeGpus.nodes[nodeName][i].mu.RUnlock()
 	}
-
 }
 
 // Computa el total de recursos que solicita un pod

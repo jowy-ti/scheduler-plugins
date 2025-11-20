@@ -4,13 +4,43 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sync"
 
 	v1 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
+
+// Constantes y estructuras de datos
+
+var _ framework.PreFilterPlugin = &MyScheduler{}
+var _ framework.FilterPlugin = &MyScheduler{}
+var _ framework.ScorePlugin = &MyScheduler{}
+var _ framework.ReservePlugin = &MyScheduler{}
+var _ framework.PostBindPlugin = &MyScheduler{}
+
+const (
+	preFilterStateKey = "resources"
+	Name              = "MyScheduler"
+)
+
+var nodeGpus allNodesGpus = allNodesGpus{
+	nodes: make(map[string][]gpuSpec),
+}
+
+var podsUsage allGpuUsage = allGpuUsage{
+	pods: make(map[string]nodeAssignedPod),
+}
+
+// StateData
+type PreFilterState struct {
+	resources framework.Resource
+}
+
+func (s *PreFilterState) Clone() framework.StateData {
+	return s
+}
 
 // Plugin
 type MyScheduler struct {
@@ -22,32 +52,16 @@ func (m *MyScheduler) Name() string {
 }
 
 func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plugin, error) {
+	podInformer := h.SharedInformerFactory().Core().V1().Pods().Informer()
+
+	podInformer.AddEventHandler(cache.FilteringResourceEventHandler{
+		FilterFunc: filterFunc,
+		Handler: cache.ResourceEventHandlerFuncs{
+			DeleteFunc: onDelete,
+		},
+	})
+
 	return &MyScheduler{handle: h}, nil
-}
-
-// Constantes y estructuras de datos
-
-var _ framework.PreFilterPlugin = &MyScheduler{}
-var _ framework.FilterPlugin = &MyScheduler{}
-var _ framework.ScorePlugin = &MyScheduler{}
-
-const (
-	preFilterStateKey = "resources"
-	Name              = "MyScheduler"
-)
-
-var nodeGpus allGpus = allGpus{
-	nodes: make(map[string][]gpuSpec),
-	mu:    sync.RWMutex{},
-}
-
-// StateData
-type PreFilterState struct {
-	resources framework.Resource
-}
-
-func (s *PreFilterState) Clone() framework.StateData {
-	return s
 }
 
 // Etapas scheduling
@@ -90,7 +104,9 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 	}
-	scanNode(nodeName)
+	if nodeName == "kwok-node-0" {
+		scanNode(nodeName)
+	}
 
 	var podRequests *framework.Resource = &preFilterState.resources
 	var nodeRequested *framework.Resource = nodeInfo.Requested
@@ -145,4 +161,38 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 		// klog.V(0).Infof("%s %s Normalize: %d", pod.Name, scores[i].Name, scores[i].Score)
 	}
 	return framework.NewStatus(framework.Success)
+}
+
+func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
+
+	name := "kwok-node-0"
+	podName := p.Name
+
+	nodeGpus.nodes[name][0].Lock()
+	nodeGpus.nodes[name][0].available -= 3
+	klog.V(0).Infof("-------------Post available: %d", nodeGpus.nodes[name][0].available)
+	nodeGpus.nodes[name][0].Unlock()
+
+	tempNodeAssignedPod := nodeAssignedPod{
+		nodeName:    name,
+		mig:         false,
+		gpuPosition: 0,
+		gpuUsage:    3,
+	}
+
+	podsUsage.Lock()
+
+	podsUsage.pods[podName] = tempNodeAssignedPod
+
+	podsUsage.Unlock()
+
+	return framework.NewStatus(framework.Success)
+}
+
+func (m *MyScheduler) Unreserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) {
+
+}
+
+func (m *MyScheduler) PostBind(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) {
+
 }
