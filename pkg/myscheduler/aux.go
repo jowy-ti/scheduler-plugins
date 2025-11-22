@@ -3,50 +3,11 @@ package myscheduler
 import (
 	"fmt"
 	"strconv"
-	"sync"
 
 	v1 "k8s.io/api/core/v1"
 	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
-
-// Mapa del uso de recursos de los pods
-type allGpuUsage struct {
-	sync.RWMutex
-	pods map[string]nodeAssignedPod
-}
-
-// Nodo asignado al pod y info de utilización de gpu
-type nodeAssignedPod struct {
-	nodeName    string
-	mig         bool
-	gpuPosition int
-	migPosition int
-	migUsage    int
-	gpuUsage    int
-}
-
-// Mapa con la disponibilidad de GPU de los nodos
-type allNodesGpus struct {
-	sync.RWMutex
-	nodes map[string][]gpuSpec
-}
-
-// Informacion de GPU
-type gpuSpec struct {
-	sync.RWMutex
-	available int // sobre 10
-	mig       bool
-	migSlices []migPartition
-}
-
-// Informacion de la particion de MIG
-type migPartition struct {
-	sync.RWMutex
-	available int
-	size      int
-	mem       int64
-}
 
 const (
 	migEnabled          string = "mig-enabled"

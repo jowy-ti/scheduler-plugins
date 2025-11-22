@@ -25,13 +25,9 @@ const (
 	Name              = "MyScheduler"
 )
 
-var nodeGpus allNodesGpus = allNodesGpus{
-	nodes: make(map[string][]gpuSpec),
-}
+var nodeGpus *allNodesGpus = newAllNodesGpus()
 
-var podsUsage allGpuUsage = allGpuUsage{
-	pods: make(map[string]nodeAssignedPod),
-}
+var podsUsage *podsGpuUsage = newPodsGpuUsage()
 
 // StateData
 type PreFilterState struct {
