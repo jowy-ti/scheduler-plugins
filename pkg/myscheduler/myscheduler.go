@@ -21,7 +21,7 @@ var _ framework.ReservePlugin = &MyScheduler{}
 var _ framework.PostBindPlugin = &MyScheduler{}
 
 const (
-	preFilterStateKey = "resources"
+	preFilterStateKey = "PodResources"
 	Name              = "MyScheduler"
 )
 
@@ -100,9 +100,6 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 	}
-	if nodeName == "kwok-node-0" {
-		scanNode(nodeName)
-	}
 
 	var podRequests *framework.Resource = &preFilterState.resources
 	var nodeRequested *framework.Resource = nodeInfo.Requested
@@ -134,6 +131,9 @@ func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, po
 	var score int64 = scoreCpuMem(nodeAllocatable, nodeRequested, nodeAvailable, podRequests) + scoreGpu(nodeAvailable)
 
 	// klog.V(0).Infof("%s %s score: %d", pod.Name, nodeName, score)
+	if nodeName == "kwok-node-0" {
+		score = 0
+	}
 
 	return score, framework.NewStatus(framework.Success)
 }
@@ -163,24 +163,10 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 
 	name := "kwok-node-0"
 	podName := p.Name
+	gpuPosition := 0
+	gpuUsage := 1
 
-	nodeGpus.nodes[name][0].Lock()
-	nodeGpus.nodes[name][0].available -= 3
-	klog.V(0).Infof("-------------Post available: %d", nodeGpus.nodes[name][0].available)
-	nodeGpus.nodes[name][0].Unlock()
-
-	tempNodeAssignedPod := nodeAssignedPod{
-		nodeName:    name,
-		mig:         false,
-		gpuPosition: 0,
-		gpuUsage:    3,
-	}
-
-	podsUsage.Lock()
-
-	podsUsage.pods[podName] = tempNodeAssignedPod
-
-	podsUsage.Unlock()
+	podsUsage.setPodResourcesGpuOnly(podName, name, gpuPosition, gpuUsage)
 
 	return framework.NewStatus(framework.Success)
 }

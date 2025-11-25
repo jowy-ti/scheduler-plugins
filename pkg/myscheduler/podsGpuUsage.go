@@ -13,15 +13,13 @@ type podsGpuUsage struct {
 
 // Nodo asignado al pod y info de utilización de gpu
 type podResources struct {
-	nodeName    string
-	mig         bool
 	gpuPosition int
 	migPosition int
 	migUsage    int
 	gpuUsage    int
+	nodeName    string
+	mig         bool
 }
-
-// Metodos del struct podsGpuUsage
 
 // Constructora
 func newPodsGpuUsage() *podsGpuUsage {
@@ -30,58 +28,7 @@ func newPodsGpuUsage() *podsGpuUsage {
 	}
 }
 
-func (p *podsGpuUsage) getNodeName(podName string) (string, error) {
-
-	p.RLock()
-	defer p.RUnlock()
-	podGpuUsage, ok := p.pods[podName]
-
-	if !ok {
-		return "", fmt.Errorf("podsGpuUsage.getNodeName: no existe el pod con nombre %s", podName)
-	}
-
-	return podGpuUsage.nodeName, nil
-}
-
-func (p *podsGpuUsage) getMig(podName string) (bool, error) {
-
-	p.RLock()
-	defer p.RUnlock()
-	podGpuUsage, ok := p.pods[podName]
-
-	if !ok {
-		return false, fmt.Errorf("podsGpuUsage.getMig: no existe el pod con nombre %s", podName)
-	}
-
-	return podGpuUsage.mig, nil
-}
-
-func (p *podsGpuUsage) getGpuUsage(podName string) (gpuPosition int, gpuUsage int, err error) {
-
-	p.RLock()
-	defer p.RUnlock()
-	podGpuUsage, ok := p.pods[podName]
-
-	if !ok {
-		return 0, 0, fmt.Errorf("podsGpuUsage.getGpuUsage: no existe el pod con nombre %s", podName)
-	}
-
-	return podGpuUsage.gpuPosition, podGpuUsage.gpuUsage, nil
-}
-
-func (p *podsGpuUsage) getMigUsage(podName string) (gpuPosition int, migPosition int, migUsage int, err error) {
-
-	p.RLock()
-	defer p.RUnlock()
-	podGpuUsage, ok := p.pods[podName]
-
-	if !ok {
-		return 0, 0, 0, fmt.Errorf("podsGpuUsage.getMigUsage: no existe el pod con nombre %s", podName)
-	}
-
-	return podGpuUsage.gpuPosition, podGpuUsage.migPosition, podGpuUsage.migUsage, nil
-}
-
+// Setters
 func (p *podsGpuUsage) setPodResourcesGpuOnly(podName string, nodeName string, gpuPosition int, gpuUsage int) error {
 
 	var resources *podResources = &podResources{
@@ -91,7 +38,7 @@ func (p *podsGpuUsage) setPodResourcesGpuOnly(podName string, nodeName string, g
 		gpuUsage:    gpuUsage,
 	}
 
-	if err := p.setPodResources(podName, resources); err != nil {
+	if err := p.addPodResources(podName, resources); err != nil {
 		return err
 	}
 
@@ -103,7 +50,6 @@ func (p *podsGpuUsage) setPodResourcesGpuOnly(podName string, nodeName string, g
 		}
 		return err
 	}
-
 	return nil
 }
 
@@ -117,7 +63,7 @@ func (p *podsGpuUsage) setPodResourcesMigOnly(podName string, nodeName string, g
 		migUsage:    migUsage,
 	}
 
-	if err := p.setPodResources(podName, resources); err != nil {
+	if err := p.addPodResources(podName, resources); err != nil {
 		return err
 	}
 
@@ -133,39 +79,24 @@ func (p *podsGpuUsage) setPodResourcesMigOnly(podName string, nodeName string, g
 	return nil
 }
 
+// Cleaners
 func (p *podsGpuUsage) cleanPodResources(podName string) error {
 
-	nodeName, err := p.getNodeName(podName)
-
-	if err != nil {
-		return err
-	}
-	mig, err := p.getMig(podName)
+	pResources, err := p.getPodResources(podName)
 
 	if err != nil {
 		return err
 	}
 
-	if !mig {
-		gpuPosition, gpuUsage, err := p.getGpuUsage(podName)
-
-		if err != nil {
-			return err
-		}
-		err = nodeGpus.cleanResourcesGpuOnly(nodeName, gpuPosition, gpuUsage)
+	if !pResources.mig {
+		err = nodeGpus.cleanResourcesGpuOnly(pResources.nodeName, pResources.gpuPosition, pResources.gpuUsage)
 
 		if err != nil {
 			return err
 		}
 
 	} else {
-
-		gpuPosition, migPosition, migUsage, err := p.getMigUsage(podName)
-
-		if err != nil {
-			return err
-		}
-		err = nodeGpus.cleanResourcesMigOnly(nodeName, gpuPosition, migPosition, migUsage)
+		err = nodeGpus.cleanResourcesMigOnly(pResources.nodeName, pResources.gpuPosition, pResources.migPosition, pResources.migUsage)
 
 		if err != nil {
 			return err
@@ -178,14 +109,35 @@ func (p *podsGpuUsage) cleanPodResources(podName string) error {
 	return nil
 }
 
-// Metodos privados
+// Geters
+func (p *podsGpuUsage) getPodResources(podName string) (resources *podResources, err error) {
 
-func (p *podsGpuUsage) setPodResources(podName string, resources *podResources) error {
+	p.RLock()
+	defer p.RUnlock()
+	podGpuUsage, ok := p.pods[podName]
+
+	if !ok {
+		return nil, fmt.Errorf("podsGpuUsage.getPodResources: no existe el pod con nombre %s", podName)
+	}
+
+	var pResources *podResources = &podResources{
+		nodeName:    podGpuUsage.nodeName,
+		mig:         podGpuUsage.mig,
+		gpuPosition: podGpuUsage.gpuPosition,
+		gpuUsage:    podGpuUsage.gpuUsage,
+		migPosition: podGpuUsage.migPosition,
+		migUsage:    podGpuUsage.migUsage,
+	}
+	return pResources, nil
+}
+
+// Metodos privados
+func (p *podsGpuUsage) addPodResources(podName string, resources *podResources) error {
 	p.Lock()
 	defer p.Unlock()
 
 	if _, exists := p.pods[podName]; exists {
-		return fmt.Errorf("podsGpuUsage.setPodResources: ya existe una reserva de recursos para el pod %s", podName)
+		return fmt.Errorf("podsGpuUsage.addPodResources: ya existe una reserva de recursos para el pod %s", podName)
 	}
 
 	p.pods[podName] = resources
@@ -205,3 +157,5 @@ func (p *podsGpuUsage) deletePodResources(podName string) error {
 
 	return nil
 }
+
+// metodos

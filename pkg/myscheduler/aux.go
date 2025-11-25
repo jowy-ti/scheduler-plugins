@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
-	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -29,49 +28,8 @@ func onDelete(obj interface{}) {
 	if !ok {
 		return
 	}
-
 	var podName string = pod.Name
-
-	// podsUsage.RLock()
-	// info, exists := podsUsage.pods[podName]
-	// podsUsage.RUnlock()
-	podsUsage.RLock()
-	var usage int = podsUsage.pods[podName].gpuUsage
-	var position int = podsUsage.pods[podName].gpuPosition
-	var nodeName string = podsUsage.pods[podName].nodeName
-	podsUsage.RUnlock()
-
-	// nodeGpus.Lock()
-	// defer nodeGpus.Unlock()
-
-	// nodeGpusSlice, ok := nodeGpus.nodes[info.nodeName]
-	// if !ok || info.gpuPosition < 0 || info.gpuPosition >= len(nodeGpusSlice) {
-	//     klog.Errorf("onDelete: Nodo %s o posición %d inválida. No se pudo liberar el recurso.", info.nodeName, info.gpuPosition)
-	//     return
-	// }
-
-	// // 🚨 Obtener el Lock de ESCRITURA de la GPU específica
-	// gpuSpec := &nodeGpusSlice[info.gpuPosition]
-	// gpuSpec.Lock()
-	// defer gpuSpec.Unlock() // Se liberará al salir de la función
-
-	// klog.V(0).Infof("onDelete: PodUsage: %d    NodeAvailable: %d", info.gpuUsage, gpuSpec.available)
-
-	// // Liberación del recurso
-	// gpuSpec.available += info.gpuUsage
-
-	// klog.V(0).Infof("onDelete: NodeAvailablePostDelete: %d", gpuSpec.available)
-
-	// // 4. (Opcional) Eliminar entrada de podsUsage si no se hace en otro sitio.
-	// // Aunque ya liberamos los recursos, si quieres mantener consistencia:
-	// podsUsage.Lock()
-	// delete(podsUsage.pods, podName)
-	// podsUsage.Unlock()
-	nodeGpus.Lock()
-	klog.V(0).Infof("+++++++++onDelete: PodUsage: %d    NodeAvailable: %d", usage, nodeGpus.nodes[nodeName][position].available)
-	nodeGpus.nodes[nodeName][position].available += usage
-	klog.V(0).Infof("+++++++++onDelete: NodeAvailablePostDelete: %d", nodeGpus.nodes[nodeName][position].available)
-	nodeGpus.Unlock()
+	podsUsage.cleanPodResources(podName)
 }
 
 // FilterFunc
@@ -82,48 +40,41 @@ func filterFunc(obj interface{}) bool {
 	if !ok {
 		return false
 	}
-
 	var podLabels map[string]string = pod.Labels
-
 	return podLabels[filterPodLabel] == filterPodLabelValue
 }
 
 // Construccion de la estructura de datos en cache de los nodos
-
 func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 
 	var nodeName string = nodeInfo.GetName()
 	var nodeLabels map[string]string = nodeInfo.Node().Labels
 	var gpuCount int64 = nodeInfo.Allocatable.ScalarResources[v1.ResourceName(gpuResourceName)]
 
+	labelMemoryGpu, ok := nodeLabels[gpuMemory]
+	if !ok {
+		return fmt.Errorf("label %s not found in node %s", gpuMemory, nodeName)
+	}
+
+	memoryGpu, err := strconv.ParseInt(labelMemoryGpu, 10, 0)
+	if err != nil {
+		return fmt.Errorf("error to convert string to int for string %s in node %s", labelMemoryGpu, nodeName)
+	}
+
 	mig, ok := nodeLabels[migEnabled]
 	if !ok {
 		return fmt.Errorf("label %s not found in node %s", migEnabled, nodeName)
 	}
 
-	var gpus []gpuSpec = make([]gpuSpec, gpuCount)
+	var gpus []*gpuSpec = make([]*gpuSpec, gpuCount)
 
 	if mig == "false" {
-
 		for i := int64(0); gpuCount > i; i++ {
-			gpus[i] = gpuSpec{
-				available: maxAvailabilityGpu,
-				mig:       false,
-			}
+			var gpu *gpuSpec = newGpuSpec()
+			gpu.setGpuSpecGpuOnly(maxAvailabilityGpu, int(memoryGpu))
+			gpus[i] = gpu
 		}
-
 	} else {
-
-		labelMemoryGpu, ok := nodeLabels[gpuMemory]
-		if !ok {
-			return fmt.Errorf("label %s not found in node %s", gpuMemory, nodeName)
-		}
-
-		MemoryGpu, err := strconv.ParseInt(labelMemoryGpu, 10, 0)
-		if err != nil {
-			return fmt.Errorf("error to convert string to int for string %s in node %s", labelMemoryGpu, nodeName)
-		}
-
 		labelInstances, ok := nodeLabels[migInstances]
 		if !ok {
 			return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
@@ -134,70 +85,19 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 			return fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
 		}
 
-		var migGeometry []migPartition = make([]migPartition, numInstances)
+		for i := 0; int(gpuCount) > i; i++ {
+			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
+			var migPartition *migSlice = newMigSlice()
+			migPartition.setInfoMigSlice(maxAvailabilityGpu, int(numInstances), int(memoryGpu))
+			migGeometry[0] = migPartition
 
-		for i := int64(0); numInstances > i; i++ {
-			migGeometry[i] = migPartition{
-				available: maxAvailabilityGpu,
-				size:      1,
-				mem:       MemoryGpu / numInstances,
-			}
-		}
-
-		for i := int64(0); gpuCount > i; i++ {
-			var clonedMigSlices []migPartition = make([]migPartition, numInstances)
-			copy(clonedMigSlices, migGeometry)
-
-			gpus[i] = gpuSpec{
-				mig:       true,
-				migSlices: clonedMigSlices,
-			}
+			var gpu *gpuSpec = newGpuSpec()
+			gpu.setGpuSpecMigOnly(migGeometry, int(memoryGpu))
+			gpus[i] = gpu
 		}
 	}
-
-	nodeGpus.Lock()
-	nodeGpus.nodes[nodeName] = gpus
-	nodeGpus.Unlock()
-
+	nodeGpus.setAllNodesGpus(gpus, nodeName)
 	return nil
-}
-
-// Debugar informacion del nodo en cache
-func scanNode(nodeName string) {
-
-	nodeGpus.RLock()
-	var nodeGpusCopy []gpuSpec = nodeGpus.nodes[nodeName]
-	nodeGpus.RUnlock()
-
-	gpuLenght := len(nodeGpusCopy)
-	klog.V(0).Infof("gpuLenght: %d", gpuLenght)
-
-	for i := 0; gpuLenght > i; i++ {
-		var gpu *gpuSpec = &nodeGpusCopy[i]
-		gpu.RLock()
-
-		klog.V(0).Infof("gpu%d info:", i)
-		klog.V(0).Infof("- available: %d", gpu.available)
-		mig := gpu.mig
-
-		var migSlices []migPartition = gpu.migSlices
-		gpu.RUnlock()
-		// klog.V(0).Infof("- mig: %t", mig)
-		if mig {
-			migLength := len(migSlices)
-			for j := 0; migLength > j; j++ {
-				var migSlice *migPartition = &migSlices[j]
-				migSlice.RLock()
-
-				klog.V(0).Info("mig slice info:")
-				klog.V(0).Infof("- available: %d", migSlice.available)
-				klog.V(0).Infof("- size: %d", migSlice.size)
-				klog.V(0).Infof("- mem: %d", migSlice.mem)
-
-				migSlice.RUnlock()
-			}
-		}
-	}
 }
 
 // Computa el total de recursos que solicita un pod
@@ -281,7 +181,7 @@ func subtractionResources(allocatable *framework.Resource, requested *framework.
 
 // Puntuación de la cpu y memoria
 func scoreCpuMem(nodeAllocatable *framework.Resource, nodeRequested *framework.Resource, nodeAvailable *framework.Resource, podRequests *framework.Resource) int64 {
-	const weightMem int64 = 1 << 20         // valor de la heuristica
+	const weightMem int = 1 << 20           // valor de la heuristica
 	const penalizationBalance float64 = 2.0 // mayor número penaliza menos el desbalance, menor penaliza más. Rango de valores posibles (1, inf) // valor de la heuristica
 
 	// Relative
@@ -296,7 +196,7 @@ func scoreCpuMem(nodeAllocatable *framework.Resource, nodeRequested *framework.R
 	var balanceCpuMem float64 = 1.0 - (relCpuMem / penalizationBalance) // Intervalo de menos a más balanceado (0.5, 1)
 
 	// Absolute
-	var weightedCpuMem int64 = (nodeAvailable.Memory / weightMem) + nodeAvailable.MilliCPU
+	var weightedCpuMem int = (int(nodeAvailable.Memory) / weightMem) + int(nodeAvailable.MilliCPU)
 
 	// Result
 	var resCpuMem float64 = float64(weightedCpuMem) / balanceCpuMem
@@ -306,50 +206,16 @@ func scoreCpuMem(nodeAllocatable *framework.Resource, nodeRequested *framework.R
 
 // Puntuación de la GPU
 func scoreGpu(nodeAvailable *framework.Resource) int64 {
-	const weightGpu int64 = 1 << 13 // valor de la heuristica
-	var resGpu int64 = 0
+	const weightGpu int = 1 << 13 // valor de la heuristica
+	var resGpu int = 0
 
 	if nodeAvailable.ScalarResources == nil {
-		return resGpu
+		return int64(resGpu)
 	}
 
 	for _, quantityAvailable := range nodeAvailable.ScalarResources {
-		resGpu += quantityAvailable * weightGpu
+		resGpu += int(quantityAvailable) * weightGpu
 	}
 
-	return resGpu
+	return int64(resGpu)
 }
-
-// // Dynamic Client
-// 	dynamicClient, err := dynamic.NewForConfig(m.handle.KubeConfig())
-// 	if err != nil {
-// 		klog.V(0).Infof("Error: %v", err)
-// 	}
-
-// 	// GVR
-// 	var gvr schema.GroupVersionResource = schema.GroupVersionResource{Group: "gpu.com", Version: "v1", Resource: "specifications"}
-
-// 	// Acceso a CR
-// 	cr, err := dynamicClient.Resource(gvr).Namespace("default").Get(context.TODO(), "example", metav1.GetOptions{})
-
-// 	if err != nil {
-// 		klog.V(0).Infof("Error: %v", err)
-// 	}
-
-// 	gpus, find, err := unstructured.NestedSlice(cr.UnstructuredContent(), "spec", "gpus")
-
-// 	if !find {
-// 		klog.V(0).Infof("Not found gpus")
-// 	} else if err != nil {
-// 		klog.V(0).Infof("Error: %v", err)
-// 	}
-
-// 	gpu1 := gpus[0]
-// 	gpu1map, ok := gpu1.(map[string]interface{})
-// 	if !ok {
-// 		klog.V(0).Infof("Error de conversión de tipos")
-// 	}
-// 	available := gpu1map["available"]
-// 	availableint := available.(int64)
-
-// 	klog.V(0).Infof("Available: %d", availableint)
