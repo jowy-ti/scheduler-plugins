@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/cache"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -26,7 +27,14 @@ func onDelete(obj interface{}) {
 	pod, ok := obj.(*v1.Pod)
 
 	if !ok {
-		return
+		unknown, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			return
+		}
+		pod, ok = unknown.Obj.(*v1.Pod)
+		if !ok {
+			return
+		}
 	}
 	var podName string = pod.Name
 	podsUsage.cleanPodResources(podName)

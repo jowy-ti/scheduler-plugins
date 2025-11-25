@@ -7,6 +7,8 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
@@ -18,18 +20,18 @@ var _ framework.PreFilterPlugin = &MyScheduler{}
 var _ framework.FilterPlugin = &MyScheduler{}
 var _ framework.ScorePlugin = &MyScheduler{}
 var _ framework.ReservePlugin = &MyScheduler{}
-var _ framework.PostBindPlugin = &MyScheduler{}
 
 const (
-	preFilterStateKey = "PodResources"
-	Name              = "MyScheduler"
+	preFilterStateKey      = "PodResources"
+	Name                   = "MyScheduler"
+	annotationKeyAssigned  = "resources.assigned/tflops"
+	annotationKeyRequested = "resources.requested/tflops"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
 
 var podsUsage *podsGpuUsage = newPodsGpuUsage()
 
-// StateData
 type PreFilterState struct {
 	resources framework.Resource
 }
@@ -40,7 +42,8 @@ func (s *PreFilterState) Clone() framework.StateData {
 
 // Plugin
 type MyScheduler struct {
-	handle framework.Handle
+	handle    framework.Handle
+	k8sClient *kubernetes.Clientset
 }
 
 func (m *MyScheduler) Name() string {
@@ -48,6 +51,7 @@ func (m *MyScheduler) Name() string {
 }
 
 func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plugin, error) {
+	// Creacion del informer
 	podInformer := h.SharedInformerFactory().Core().V1().Pods().Informer()
 
 	podInformer.AddEventHandler(cache.FilteringResourceEventHandler{
@@ -56,8 +60,21 @@ func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plu
 			DeleteFunc: onDelete,
 		},
 	})
+	// Inicializar la configuración de Kubernetes
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, fmt.Errorf("error al obtener la configuración in-cluster: %w", err)
+	}
+	// Crear el cliente de la API K8s
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("error al crear el cliente de K8s: %w", err)
+	}
 
-	return &MyScheduler{handle: h}, nil
+	return &MyScheduler{
+		handle:    h,
+		k8sClient: clientset,
+	}, nil
 }
 
 // Etapas scheduling
@@ -175,6 +192,23 @@ func (m *MyScheduler) Unreserve(ctx context.Context, state *framework.CycleState
 
 }
 
-func (m *MyScheduler) PostBind(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) {
+// func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
-}
+// 	var tFlops int = 100
+// 	intValueStr := strconv.Itoa(tFlops)
+
+// 	// preFilterState, err := getPreFilterState(state)
+
+// 	// if err != nil {
+// 	// 	return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
+// 	// }
+
+// 	patchPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s", "%s":"%s"}}}`, annotationKeyAssigned, intValueStr, annotationKeyRequested, "50")
+
+// 	_, err := m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
+
+// 	if err != nil {
+// 		return framework.NewStatus(framework.Error, fmt.Sprintf("Fallo al añadir la anotación en PreBind: %v", err))
+// 	}
+// 	return framework.NewStatus(framework.Success)
+// }
