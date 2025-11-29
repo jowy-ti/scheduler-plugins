@@ -13,15 +13,15 @@ func scanNode(nodeName string) {
 	klog.V(0).Infof("gpuLenght: %d", gpuLenght)
 
 	for i := 0; gpuLenght > i; i++ {
-		available, mem, mig, err := nodeGpus.getGeneralGpuResources(nodeName, i)
+		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, i)
 
 		if err != nil {
 			klog.V(0).Infof("%v", err)
 			return
 		}
-		klog.V(0).Infof("Available: %d", available)
-		klog.V(0).Infof("Memory: %d", mem)
-		klog.V(0).Infof("MigEnabled: %t", mig)
+		klog.V(0).Infof("Available: %d", gpu.available)
+		klog.V(0).Infof("Memory: %d", gpu.mem)
+		klog.V(0).Infof("MigEnabled: %t", gpu.mig)
 	}
 }
 

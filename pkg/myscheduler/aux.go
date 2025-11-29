@@ -15,6 +15,7 @@ const (
 	gpuResourceName     string = "nvidia.com/gpu"
 	maxAvailabilityGpu  int    = 10
 	gpuMemory           string = "nvidia.com/gpu.memory"
+	gpufp32GFLOPS       string = "nvidia.com/gpu.fp32.GFLOPS"
 	filterPodLabel      string = "app"
 	filterPodLabelValue string = "fake-pod"
 )
@@ -69,20 +70,34 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 		return fmt.Errorf("error to convert string to int for string %s in node %s", labelMemoryGpu, nodeName)
 	}
 
-	mig, ok := nodeLabels[migEnabled]
+	labelfp32Gpu, ok := nodeLabels[gpufp32GFLOPS]
+	if !ok {
+		return fmt.Errorf("label %s not found in node %s", gpufp32GFLOPS, nodeName)
+	}
+
+	fp32Gpu, err := strconv.ParseInt(labelfp32Gpu, 10, 0)
+	if err != nil {
+		return fmt.Errorf("error to convert string to int for string %s in node %s", labelfp32Gpu, nodeName)
+	}
+
+	labelMig, ok := nodeLabels[migEnabled]
 	if !ok {
 		return fmt.Errorf("label %s not found in node %s", migEnabled, nodeName)
 	}
 
+	mig, err := strconv.ParseBool(labelMig)
+	if err != nil {
+		return fmt.Errorf("error to convert string to bool for string %s in node %s", labelMig, nodeName)
+	}
+
 	var gpus []*gpuSpec = make([]*gpuSpec, gpuCount)
 
-	if mig == "false" {
-		for i := int64(0); gpuCount > i; i++ {
-			var gpu *gpuSpec = newGpuSpec()
-			gpu.setGpuSpecGpuOnly(maxAvailabilityGpu, int(memoryGpu))
-			gpus[i] = gpu
-		}
-	} else {
+	for i := int64(0); gpuCount > i; i++ {
+		gpus[i] = newGpuSpec()
+		gpus[i].setGpuSpecGpuOnly(maxAvailabilityGpu, int(memoryGpu), int(fp32Gpu), mig)
+	}
+
+	if mig {
 		labelInstances, ok := nodeLabels[migInstances]
 		if !ok {
 			return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
@@ -95,15 +110,13 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 
 		for i := 0; int(gpuCount) > i; i++ {
 			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
-			var migPartition *migSlice = newMigSlice()
-			migPartition.setInfoMigSlice(maxAvailabilityGpu, int(numInstances), int(memoryGpu))
-			migGeometry[0] = migPartition
+			migGeometry[0] = newMigSlice()
+			migGeometry[0].setInfoMigSlice(maxAvailabilityGpu, int(numInstances), int(memoryGpu), int(fp32Gpu))
 
-			var gpu *gpuSpec = newGpuSpec()
-			gpu.setGpuSpecMigOnly(migGeometry, int(memoryGpu))
-			gpus[i] = gpu
+			gpus[i].setGpuSpecMigOnly(migGeometry)
 		}
 	}
+
 	nodeGpus.setAllNodesGpus(gpus, nodeName)
 	return nil
 }
