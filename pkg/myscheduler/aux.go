@@ -16,6 +16,8 @@ const (
 	maxAvailabilityGpu  int    = 10
 	gpuMemory           string = "nvidia.com/gpu.memory"
 	gpufp32GFLOPS       string = "nvidia.com/gpu.fp32.GFLOPS"
+	podRequestGpuMemory string = "customresource.com/gpuMemory"
+	podRequestGpufp32   string = "customresource.com/gpufp32"
 	filterPodLabel      string = "app"
 	filterPodLabelValue string = "fake-pod"
 )
@@ -90,29 +92,28 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 		return fmt.Errorf("error to convert string to bool for string %s in node %s", labelMig, nodeName)
 	}
 
+	labelInstances, ok := nodeLabels[migInstances]
+	if !ok {
+		return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
+	}
+	numInstances, err := strconv.ParseInt(labelInstances, 10, 0)
+
+	if err != nil {
+		return fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
+	}
+
 	var gpus []*gpuSpec = make([]*gpuSpec, gpuCount)
 
 	for i := int64(0); gpuCount > i; i++ {
 		gpus[i] = newGpuSpec()
-		gpus[i].setGpuSpecGpuOnly(maxAvailabilityGpu, int(memoryGpu), int(fp32Gpu), mig)
+		gpus[i].setGpuSpecGpuOnly(int(memoryGpu), int(fp32Gpu), mig, int(numInstances))
 	}
 
 	if mig {
-		labelInstances, ok := nodeLabels[migInstances]
-		if !ok {
-			return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
-		}
-
-		numInstances, err := strconv.ParseInt(labelInstances, 10, 0)
-		if err != nil {
-			return fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
-		}
-
 		for i := 0; int(gpuCount) > i; i++ {
 			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
 			migGeometry[0] = newMigSlice()
-			migGeometry[0].setInfoMigSlice(maxAvailabilityGpu, int(numInstances), int(memoryGpu), int(fp32Gpu))
-
+			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu))
 			gpus[i].setGpuSpecMigOnly(migGeometry)
 		}
 	}
@@ -159,25 +160,56 @@ func getPreFilterState(cycleState *framework.CycleState) (*PreFilterState, error
 }
 
 // Verifica si el nodo tiene recursos suficientes para el pod
-func enoughNodeResources(nodeAllocatable *framework.Resource, nodeRequested *framework.Resource, podRequests *framework.Resource) *framework.Status {
+func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem int, podRequests *framework.Resource) *framework.Status {
 
-	var resourcesAvailable *framework.Resource = subtractionResources(nodeAllocatable, nodeRequested)
-
-	if resourcesAvailable.MilliCPU < podRequests.MilliCPU {
+	if availableNodeCpu < int(podRequests.MilliCPU) {
 		return framework.NewStatus(framework.Unschedulable, "Insufficient CPU")
 	}
-
-	if resourcesAvailable.Memory < podRequests.Memory {
+	if availableNodeMem < int(podRequests.Memory) {
 		return framework.NewStatus(framework.Unschedulable, "Insufficient Memory")
 	}
 
-	for resourceName, amount := range podRequests.ScalarResources {
-		if resourcesAvailable.ScalarResources[resourceName] < amount {
-			return framework.NewStatus(framework.Unschedulable, fmt.Sprintf("Insufficient %s", resourceName.String()))
+	totalGpus, err := nodeGpus.getLength(nodeName)
+
+	if err != nil {
+		return framework.NewStatus(framework.Unschedulable, err.Error())
+	}
+
+	for i := 0; totalGpus > i; i++ {
+		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, i)
+		if err != nil {
+			return framework.NewStatus(framework.Unschedulable, err.Error())
+		}
+
+		if !gpu.mig {
+			var gpuAvailable float64 = float64(gpu.available) / 10.0
+			var gpuMemAvailable int = int(gpuAvailable * float64(gpu.mem))
+			var gpuFp32Available int = int(gpuAvailable * float64(gpu.fp32))
+
+			if gpuMemAvailable > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpuMemory)]) && gpuFp32Available > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpufp32)]) {
+				return framework.NewStatus(framework.Success)
+			}
+		} else {
+			for j := 0; gpu.migLength > j; j++ {
+				migPartition, err := gpu.getMigSlice(j)
+				if err != nil {
+					return framework.NewStatus(framework.Unschedulable, err.Error())
+				}
+
+				var migAvailable float64 = float64(migPartition.available) / 10.0
+				var migMemAvailable int = int(migAvailable * float64(migPartition.mem))
+				var migFp32Available int = int(migAvailable * float64(migPartition.fp32))
+
+				if migMemAvailable > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpuMemory)]) && migFp32Available > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpufp32)]) {
+					return framework.NewStatus(framework.Success)
+				}
+
+				j += migPartition.size - 1
+			}
 		}
 	}
 
-	return framework.NewStatus(framework.Success)
+	return framework.NewStatus(framework.Unschedulable, "Insufficient resources")
 }
 
 // Recursos disponibles

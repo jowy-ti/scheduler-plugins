@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
+	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -29,8 +30,6 @@ const (
 	preFilterStateKey     framework.StateKey = "PodResources"
 	Name                  string             = "MyScheduler"
 	annotationKeyAssigned string             = "deadline"
-	podRequestGpuMemory   string             = "gpuMemory"
-	podRequestGpufp32     string             = "gpufp32"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -105,29 +104,31 @@ func (m *MyScheduler) PreFilterExtensions() framework.PreFilterExtensions {
 
 func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeInfo *framework.NodeInfo) *framework.Status {
 
-	// pod requests
-	// preFilterState, err := getPreFilterState(state)
+	preFilterState, err := getPreFilterState(state)
 
-	// if err != nil {
-	// 	return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
-	// }
+	if err != nil {
+		return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
+	}
 
-	// var nodeName string = nodeInfo.GetName()
-	// _, ok := nodeGpus.nodes[nodeName]
-	// if !ok {
-	// 	klog.V(0).Infof("Not found node %s", nodeName)
-	// 	err = gpuNodeBuild(nodeInfo)
+	var nodeName string = nodeInfo.GetName()
+	_, ok := nodeGpus.nodes[nodeName]
 
-	// 	if err != nil {
-	// 		return framework.NewStatus(framework.Unschedulable, err.Error())
-	// 	}
-	// }
+	if !ok {
+		klog.V(0).Infof("Not found node %s", nodeName)
+		err := gpuNodeBuild(nodeInfo)
 
-	// var podRequests *framework.Resource = &preFilterState.resources
-	// var nodeRequested *framework.Resource = nodeInfo.Requested
-	// var nodeAllocatable *framework.Resource = nodeInfo.Allocatable
+		if err != nil {
+			return framework.NewStatus(framework.Unschedulable, err.Error())
+		}
+	}
+	if nodeName == "kwok-node-1" {
+		scanNode(nodeName)
+	}
+	var podRequests *framework.Resource = &preFilterState.resources
+	var availableNodeCpu int = int(nodeInfo.Allocatable.MilliCPU - nodeInfo.Requested.MilliCPU)
+	var availableNodeMem int = int(nodeInfo.Allocatable.Memory - nodeInfo.Requested.Memory)
 
-	return framework.NewStatus(framework.Success) //enoughNodeResources(nodeAllocatable, nodeRequested, podRequests)
+	return enoughNodeResources(nodeName, availableNodeCpu, availableNodeMem, podRequests)
 }
 
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
@@ -138,8 +139,8 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	gpuUsage := 1
 
 	podsUsage.setPodResourcesGpuOnly(podName, name, gpuPosition, gpuUsage)
-	scanNode(name)
-	scanPodUsage(podName)
+	// scanNode(name)
+	// scanPodUsage(podName)
 
 	return framework.NewStatus(framework.Success)
 }
@@ -156,10 +157,10 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 	// 	return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
 	// }
 
-	var tFlops int = int(30 + time.Now().Unix())
-	intValueStr := strconv.Itoa(tFlops)
+	var timeInt int = int(30 + time.Now().Unix())
+	timeStr := strconv.Itoa(timeInt)
 
-	patchPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, annotationKeyAssigned, intValueStr)
+	patchPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, annotationKeyAssigned, timeStr)
 
 	_, err := m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 
