@@ -1,0 +1,90 @@
+package myscheduler
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Informacion de GPU
+type gpuSpec struct {
+	sync.RWMutex
+	available int // sobre 10
+	mem       int
+	fp32      int // GFLOPS
+	migLength int
+	migSlices []*migSlice
+	mig       bool
+}
+
+// Metodos gpuSpec
+func newGpuSpec() *gpuSpec {
+	return &gpuSpec{}
+}
+
+// Setters
+func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, mig bool, migLength int) error {
+	if mig {
+		g.available = -1
+	} else {
+		g.available = maxAvailabilityGpu
+	}
+	g.mem = mem
+	g.fp32 = fp32
+	g.mig = mig
+	g.migLength = migLength
+	return nil
+}
+
+// prohibido usarlo en nodeGpus, uso unicamente en estructuras locales
+func (g *gpuSpec) setGpuSpecMigOnly(migPartition []*migSlice) error {
+	if migPartition == nil {
+		return fmt.Errorf("gpuSpec.setGpuSpecMigOnly: no se puede crear un *gpuSpec con mig y migPartition nil")
+	}
+	g.migSlices = migPartition
+	return nil
+}
+
+// Metodos privados para 'allNodesGpus' no protegidos con RWMutex
+func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
+
+	var migSlices []*migSlice = g.migSlices
+
+	if migPosition >= len(migSlices) || migPosition < 0 {
+		return nil, fmt.Errorf("gpuSpec.getMigSlice: posición de MIG fuera de rango %d", migPosition)
+	}
+
+	return migSlices[migPosition], nil
+}
+
+func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
+
+	var migPartitions []*migSlice = make([]*migSlice, g.migLength)
+
+	for i := 0; g.migLength > i; i++ {
+		migPartition, err := g.getMigSlice(i)
+
+		if err != nil {
+			return nil, err
+		}
+
+		migPartition.RLock()
+		migPartitions[i] = &migSlice{
+			available: migPartition.available,
+			mem:       migPartition.mem,
+			size:      migPartition.size,
+			fp32:      migPartition.fp32,
+		}
+		migPartition.RUnlock()
+	}
+
+	var gpu *gpuSpec = &gpuSpec{
+		available: g.available,
+		mem:       g.mem,
+		fp32:      g.fp32,
+		mig:       g.mig,
+		migLength: g.migLength,
+		migSlices: migPartitions,
+	}
+
+	return gpu, nil
+}

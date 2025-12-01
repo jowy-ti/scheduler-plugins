@@ -11,26 +11,6 @@ type allNodesGpus struct {
 	nodes map[string][]*gpuSpec
 }
 
-// Informacion de GPU
-type gpuSpec struct {
-	sync.RWMutex
-	available int // sobre 10
-	mem       int
-	fp32      int // GFLOPS
-	migLength int
-	migSlices []*migSlice
-	mig       bool
-}
-
-// Informacion de la particion de MIG
-type migSlice struct {
-	sync.RWMutex
-	available int
-	size      int
-	mem       int
-	fp32      int // GFLOPS
-}
-
 // Constructora
 func newAllNodesGpus() *allNodesGpus {
 	return &allNodesGpus{
@@ -79,46 +59,14 @@ func (p *allNodesGpus) getGeneralGpuResources(nodeName string, gpuPosition int) 
 	gpu.RLock()
 	defer gpu.RUnlock()
 
-	gpuCopy := &gpuSpec{
-		available: gpu.available,
-		mem:       gpu.mem,
-		fp32:      gpu.fp32,
-		mig:       gpu.mig,
-		migLength: gpu.migLength,
-		migSlices: gpu.migSlices,
+	gpuCopy, err := gpu.deepCopy()
+
+	if err != nil {
+		return nil, err
 	}
 
 	return gpuCopy, nil
 }
-
-// func (p *allNodesGpus) getMigResources(nodeName string, gpuPosition int, migPosition int) (m *migSlice, err error) {
-// 	p.RLock()
-// 	defer p.RUnlock()
-
-// 	gpu, err := p.getGpu(nodeName, gpuPosition)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	gpu.RLock()
-// 	defer gpu.RUnlock()
-
-// 	migPartition, err := gpu.getMigSlice(migPosition)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	migPartitionCopy := &migSlice{
-// 		available: migPartition.available,
-// 		size:      migPartition.size,
-// 		mem:       migPartition.mem,
-// 		fp32:      migPartition.fp32,
-// 	}
-
-// 	return migPartitionCopy, nil
-// }
 
 // Metodos para podsGpuUsage
 func (p *allNodesGpus) cleanResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
@@ -243,56 +191,31 @@ func (p *allNodesGpus) getGpu(nodeName string, gpuPosition int) (*gpuSpec, error
 	return gpus[gpuPosition], nil
 }
 
-// Metodos gpuSpec
-func newGpuSpec() *gpuSpec {
-	return &gpuSpec{}
-}
+// func (p *allNodesGpus) getMigResources(nodeName string, gpuPosition int, migPosition int) (m *migSlice, err error) {
+// 	p.RLock()
+// 	defer p.RUnlock()
 
-// Setters
-func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, mig bool, migLength int) error {
-	if mig {
-		g.available = -1
-	} else {
-		g.available = maxAvailabilityGpu
-	}
-	g.mem = mem
-	g.fp32 = fp32
-	g.mig = mig
-	g.migLength = migLength
-	return nil
-}
+// 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
-func (g *gpuSpec) setGpuSpecMigOnly(migPartition []*migSlice) error {
-	if migPartition == nil {
-		return fmt.Errorf("gpuSpec.setGpuSpecMigOnly: no se puede crear un *gpuSpec con mig y migPartition nil")
-	}
-	g.migSlices = migPartition
-	return nil
-}
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-// Metodos privados no protegido por Mutex!!
-func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
+// 	gpu.RLock()
+// 	defer gpu.RUnlock()
 
-	var migSlices []*migSlice = g.migSlices
+// 	migPartition, err := gpu.getMigSlice(migPosition)
 
-	if migPosition >= len(migSlices) || migPosition < 0 {
-		return nil, fmt.Errorf("gpuSpec.getMigSlice: posición de MIG fuera de rango %d", migPosition)
-	}
+// 	if err != nil {
+// 		return nil, err
+// 	}
 
-	return migSlices[migPosition], nil
-}
+// 	migPartitionCopy := &migSlice{
+// 		available: migPartition.available,
+// 		size:      migPartition.size,
+// 		mem:       migPartition.mem,
+// 		fp32:      migPartition.fp32,
+// 	}
 
-// Metodos migSlice
-
-func newMigSlice() *migSlice {
-	return &migSlice{}
-}
-
-// Setters
-func (m *migSlice) setInfoMigSlice(size int, mem int, fp32 int) error {
-	m.available = maxAvailabilityGpu
-	m.size = size
-	m.mem = mem
-	m.fp32 = fp32
-	return nil
-}
+// 	return migPartitionCopy, nil
+// }

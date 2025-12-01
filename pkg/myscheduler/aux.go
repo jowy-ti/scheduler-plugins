@@ -191,10 +191,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 			}
 		} else {
 			for j := 0; gpu.migLength > j; j++ {
-				migPartition, err := gpu.getMigSlice(j)
-				if err != nil {
-					return framework.NewStatus(framework.Unschedulable, err.Error())
-				}
+				migPartition := gpu.migSlices[j]
 
 				var migAvailable float64 = float64(migPartition.available) / 10.0
 				var migMemAvailable int = int(migAvailable * float64(migPartition.mem))
@@ -210,65 +207,4 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 	}
 
 	return framework.NewStatus(framework.Unschedulable, "Insufficient resources")
-}
-
-// Recursos disponibles
-func subtractionResources(allocatable *framework.Resource, requested *framework.Resource) *framework.Resource {
-	var result *framework.Resource = &framework.Resource{}
-
-	result.MilliCPU = allocatable.MilliCPU - requested.MilliCPU
-	result.Memory = allocatable.Memory - requested.Memory
-
-	if allocatable.ScalarResources == nil {
-		return result
-	}
-
-	result.ScalarResources = make(map[v1.ResourceName]int64)
-
-	for resourceNameAllocatable, quantityAllocatable := range allocatable.ScalarResources {
-		result.ScalarResources[resourceNameAllocatable] = quantityAllocatable - requested.ScalarResources[resourceNameAllocatable]
-	}
-
-	return result
-}
-
-// Puntuación de la cpu y memoria
-func scoreCpuMem(nodeAllocatable *framework.Resource, nodeRequested *framework.Resource, nodeAvailable *framework.Resource, podRequests *framework.Resource) int64 {
-	const weightMem int = 1 << 20           // valor de la heuristica
-	const penalizationBalance float64 = 2.0 // mayor número penaliza menos el desbalance, menor penaliza más. Rango de valores posibles (1, inf) // valor de la heuristica
-
-	// Relative
-	var memRel float64 = float64(nodeRequested.Memory+podRequests.Memory) / float64(nodeAllocatable.Memory)
-	var cpuRel float64 = float64(nodeRequested.MilliCPU+podRequests.MilliCPU) / float64(nodeAllocatable.MilliCPU)
-	var relCpuMem float64 = memRel - cpuRel
-
-	if relCpuMem < 0 {
-		relCpuMem = -1.0 * relCpuMem
-	}
-
-	var balanceCpuMem float64 = 1.0 - (relCpuMem / penalizationBalance) // Intervalo de menos a más balanceado (0.5, 1)
-
-	// Absolute
-	var weightedCpuMem int = (int(nodeAvailable.Memory) / weightMem) + int(nodeAvailable.MilliCPU)
-
-	// Result
-	var resCpuMem float64 = float64(weightedCpuMem) / balanceCpuMem
-	// klog.V(0).Infof("Resources: %d     Balance: %f", weightedCpuMem, balanceCpuMem)
-	return int64(resCpuMem)
-}
-
-// Puntuación de la GPU
-func scoreGpu(nodeAvailable *framework.Resource) int64 {
-	const weightGpu int = 1 << 13 // valor de la heuristica
-	var resGpu int = 0
-
-	if nodeAvailable.ScalarResources == nil {
-		return int64(resGpu)
-	}
-
-	for _, quantityAvailable := range nodeAvailable.ScalarResources {
-		resGpu += int(quantityAvailable) * weightGpu
-	}
-
-	return int64(resGpu)
 }
