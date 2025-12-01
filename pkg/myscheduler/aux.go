@@ -10,7 +10,6 @@ import (
 )
 
 const (
-	migEnabled          string = "mig-enabled"
 	migInstances        string = "mig-instances"
 	gpuResourceName     string = "nvidia.com/gpu"
 	maxAvailabilityGpu  int    = 10
@@ -153,10 +152,10 @@ func getPreFilterState(cycleState *framework.CycleState) (*PreFilterState, error
 func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem int, podRequests *framework.Resource) *framework.Status {
 
 	if availableNodeCpu < int(podRequests.MilliCPU) {
-		return framework.NewStatus(framework.Unschedulable, "Insufficient CPU")
+		return framework.NewStatus(framework.Unschedulable, "CPU Insuficiente")
 	}
 	if availableNodeMem < int(podRequests.Memory) {
-		return framework.NewStatus(framework.Unschedulable, "Insufficient Memory")
+		return framework.NewStatus(framework.Unschedulable, "Memoria insuficiente")
 	}
 
 	totalGpus, err := nodeGpus.getLength(nodeName)
@@ -196,5 +195,5 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 		}
 	}
 
-	return framework.NewStatus(framework.Unschedulable, "Insufficient resources")
+	return framework.NewStatus(framework.Unschedulable, "Recursos insuficientes")
 }

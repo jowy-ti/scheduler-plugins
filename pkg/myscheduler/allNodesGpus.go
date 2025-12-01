@@ -91,28 +91,6 @@ func (p *allNodesGpus) cleanResourcesGpuOnly(nodeName string, gpuPosition int, g
 	return nil
 }
 
-func (p *allNodesGpus) reserveResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
-
-	p.RLock()
-	defer p.RUnlock()
-
-	gpu, err := p.getGpu(nodeName, gpuPosition)
-
-	if err != nil {
-		return err
-	}
-
-	gpu.Lock()
-	defer gpu.Unlock()
-
-	if gpu.available < gpuUsage {
-		return fmt.Errorf("allNodesGpus.reserveResourcesGpuOnly: no hay suficientes recursos de gpu. gpu libre: %d. gpu demandada %d", gpu.available, gpuUsage)
-	}
-
-	gpu.available -= gpuUsage
-	return nil
-}
-
 func (p *allNodesGpus) cleanResourcesMigOnly(nodeName string, gpuPosition int, migPosition int, migUsage int) error {
 
 	p.RLock()
@@ -141,6 +119,28 @@ func (p *allNodesGpus) cleanResourcesMigOnly(nodeName string, gpuPosition int, m
 	}
 
 	migSlice.available += migUsage
+	return nil
+}
+
+func (p *allNodesGpus) reserveResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
+
+	p.RLock()
+	defer p.RUnlock()
+
+	gpu, err := p.getGpu(nodeName, gpuPosition)
+
+	if err != nil {
+		return err
+	}
+
+	gpu.Lock()
+	defer gpu.Unlock()
+
+	if gpu.available < gpuUsage {
+		return fmt.Errorf("allNodesGpus.reserveResourcesGpuOnly: no hay suficientes recursos de gpu. gpu libre: %d. gpu demandada %d", gpu.available, gpuUsage)
+	}
+
+	gpu.available -= gpuUsage
 	return nil
 }
 

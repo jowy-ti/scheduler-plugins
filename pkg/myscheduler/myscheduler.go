@@ -107,7 +107,7 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
-		return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
+		return framework.NewStatus(framework.Unschedulable, "Fallo al leer 'preFilterState' en 'cycleState'")
 	}
 
 	var nodeName string = nodeInfo.GetName()
@@ -121,9 +121,6 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 	}
-	if nodeName == "kwok-node-1" {
-		scanNode(nodeName)
-	}
 	var podRequests *framework.Resource = &preFilterState.resources
 	var availableNodeCpu int = int(nodeInfo.Allocatable.MilliCPU - nodeInfo.Requested.MilliCPU)
 	var availableNodeMem int = int(nodeInfo.Allocatable.Memory - nodeInfo.Requested.Memory)
@@ -133,20 +130,32 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
 
-	name := "kwok-node-0"
+	kwok0 := "kwok-node-0"
+	kwok1 := "kwok-node-1"
 	podName := p.Name
 	gpuPosition := 0
-	gpuUsage := 1
+	gpuUsage := 3
+	migPosition := 0
+	migUsage := 5
 
-	podsUsage.setPodResourcesGpuOnly(podName, name, gpuPosition, gpuUsage)
-	// scanNode(name)
-	// scanPodUsage(podName)
+	err := podsUsage.setPodResourcesGpuOnly(podName, kwok0, gpuPosition, gpuUsage)
+	if err != nil {
+		klog.V(0).Infof("%v", err)
+	}
+
+	err = podsUsage.setPodResourcesMigOnly(podName, kwok1, gpuPosition, migPosition, migUsage)
+
+	if err != nil {
+		klog.V(0).Infof("%v", err)
+	}
+	scanPodUsage(podName)
+	scanNode(kwok0)
 
 	return framework.NewStatus(framework.Success)
 }
 
 func (m *MyScheduler) Unreserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) {
-	// Hay que implemetarlo seguramente
+	podsUsage.cleanPodResources(p.Name)
 }
 
 func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {

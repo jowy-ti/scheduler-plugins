@@ -18,7 +18,7 @@ func newMigSlice() *migSlice {
 	return &migSlice{}
 }
 
-// Setters
+// Setters. Prohibido usarlos en nodeGpus, uso unicamente en estructuras locales
 func (m *migSlice) setInfoMigSlice(size int, mem int, fp32 int) {
 	m.available = maxAvailabilityGpu
 	m.size = size

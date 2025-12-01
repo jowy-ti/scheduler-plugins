@@ -22,7 +22,7 @@ func newGpuSpec() *gpuSpec {
 
 // Setters. Prohibido usarlos en nodeGpus, uso unicamente en estructuras locales
 func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, migLength int) error {
-	if migLength == 0 {
+	if migLength > 0 {
 		g.available = -1
 	} else {
 		g.available = maxAvailabilityGpu
@@ -48,6 +48,10 @@ func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
 
 	if migPosition >= len(migSlices) || migPosition < 0 {
 		return nil, fmt.Errorf("gpuSpec.getMigSlice: posición de MIG fuera de rango %d", migPosition)
+	}
+
+	if migSlices[migPosition] == nil {
+		return nil, fmt.Errorf("gpuSpec.getMigSlice: no es la posición de ninguna partición MIG %d", migPosition)
 	}
 
 	return migSlices[migPosition], nil
