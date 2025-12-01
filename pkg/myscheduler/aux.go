@@ -82,16 +82,6 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 		return fmt.Errorf("error to convert string to int for string %s in node %s", labelfp32Gpu, nodeName)
 	}
 
-	labelMig, ok := nodeLabels[migEnabled]
-	if !ok {
-		return fmt.Errorf("label %s not found in node %s", migEnabled, nodeName)
-	}
-
-	mig, err := strconv.ParseBool(labelMig)
-	if err != nil {
-		return fmt.Errorf("error to convert string to bool for string %s in node %s", labelMig, nodeName)
-	}
-
 	labelInstances, ok := nodeLabels[migInstances]
 	if !ok {
 		return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
@@ -106,10 +96,10 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 
 	for i := int64(0); gpuCount > i; i++ {
 		gpus[i] = newGpuSpec()
-		gpus[i].setGpuSpecGpuOnly(int(memoryGpu), int(fp32Gpu), mig, int(numInstances))
+		gpus[i].setGpuSpecGpuOnly(int(memoryGpu), int(fp32Gpu), int(numInstances))
 	}
 
-	if mig {
+	if numInstances > 0 {
 		for i := 0; int(gpuCount) > i; i++ {
 			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
 			migGeometry[0] = newMigSlice()
@@ -181,7 +171,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 
-		if !gpu.mig {
+		if gpu.migLength == 0 {
 			var gpuAvailable float64 = float64(gpu.available) / 10.0
 			var gpuMemAvailable int = int(gpuAvailable * float64(gpu.mem))
 			var gpuFp32Available int = int(gpuAvailable * float64(gpu.fp32))

@@ -13,7 +13,6 @@ type gpuSpec struct {
 	fp32      int // GFLOPS
 	migLength int
 	migSlices []*migSlice
-	mig       bool
 }
 
 // Metodos gpuSpec
@@ -21,21 +20,19 @@ func newGpuSpec() *gpuSpec {
 	return &gpuSpec{}
 }
 
-// Setters
-func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, mig bool, migLength int) error {
-	if mig {
+// Setters. Prohibido usarlos en nodeGpus, uso unicamente en estructuras locales
+func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, migLength int) error {
+	if migLength == 0 {
 		g.available = -1
 	} else {
 		g.available = maxAvailabilityGpu
 	}
 	g.mem = mem
 	g.fp32 = fp32
-	g.mig = mig
 	g.migLength = migLength
 	return nil
 }
 
-// prohibido usarlo en nodeGpus, uso unicamente en estructuras locales
 func (g *gpuSpec) setGpuSpecMigOnly(migPartition []*migSlice) error {
 	if migPartition == nil {
 		return fmt.Errorf("gpuSpec.setGpuSpecMigOnly: no se puede crear un *gpuSpec con mig y migPartition nil")
@@ -75,13 +72,13 @@ func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
 			fp32:      migPartition.fp32,
 		}
 		migPartition.RUnlock()
+		i += migPartitions[i].size - 1
 	}
 
 	var gpu *gpuSpec = &gpuSpec{
 		available: g.available,
 		mem:       g.mem,
 		fp32:      g.fp32,
-		mig:       g.mig,
 		migLength: g.migLength,
 		migSlices: migPartitions,
 	}

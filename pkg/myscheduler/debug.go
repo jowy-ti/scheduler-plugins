@@ -20,19 +20,15 @@ func scanNode(nodeName string) {
 			return
 		}
 
-		if !gpu.mig {
+		if gpu.migLength == 0 {
 			klog.V(0).Infof("Available: %d", gpu.available)
 			klog.V(0).Infof("Memory: %d", gpu.mem)
 			klog.V(0).Infof("Fp32: %d", gpu.fp32)
-			klog.V(0).Infof("MigEnabled: %t", gpu.mig)
 			klog.V(0).Infof("MigLength: %d", gpu.migLength)
 		} else {
 			for j := 0; gpu.migLength > j; j++ {
-				migPartition, err := gpu.getMigSlice(j)
-				if err != nil {
-					klog.V(0).Infof("%v", err)
-					return
-				}
+				migPartition := gpu.migSlices[j]
+
 				klog.V(0).Infof("Available: %d", migPartition.available)
 				klog.V(0).Infof("Memory: %d", migPartition.mem)
 				klog.V(0).Infof("Fp32: %d", migPartition.fp32)
