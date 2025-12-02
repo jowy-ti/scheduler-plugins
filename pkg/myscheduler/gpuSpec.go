@@ -8,7 +8,7 @@ import (
 // Informacion de GPU
 type gpuSpec struct {
 	sync.RWMutex
-	available int // sobre 10
+	available int // sobre maxAvailabilityGpu
 	mem       int
 	fp32      int // GFLOPS
 	migLength int
@@ -59,24 +59,31 @@ func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
 
 func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
 
-	var migPartitions []*migSlice = make([]*migSlice, g.migLength)
+	g.RLock()
+	defer g.RUnlock()
 
-	for i := 0; g.migLength > i; i++ {
-		migPartition, err := g.getMigSlice(i)
+	var migPartitions []*migSlice
 
-		if err != nil {
-			return nil, err
+	if g.migLength > 0 {
+		migPartitions = make([]*migSlice, g.migLength)
+
+		for i := 0; g.migLength > i; i++ {
+			migPartition, err := g.getMigSlice(i)
+
+			if err != nil {
+				return nil, err
+			}
+
+			migPartition.RLock()
+			migPartitions[i] = &migSlice{
+				available: migPartition.available,
+				mem:       migPartition.mem,
+				size:      migPartition.size,
+				fp32:      migPartition.fp32,
+			}
+			migPartition.RUnlock()
+			i += migPartitions[i].size - 1
 		}
-
-		migPartition.RLock()
-		migPartitions[i] = &migSlice{
-			available: migPartition.available,
-			mem:       migPartition.mem,
-			size:      migPartition.size,
-			fp32:      migPartition.fp32,
-		}
-		migPartition.RUnlock()
-		i += migPartitions[i].size - 1
 	}
 
 	var gpu *gpuSpec = &gpuSpec{

@@ -6,13 +6,14 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
+	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
 	migInstances        string = "mig-instances"
 	gpuResourceName     string = "nvidia.com/gpu"
-	maxAvailabilityGpu  int    = 10
+	maxAvailabilityGpu  int    = 100
 	gpuMemory           string = "nvidia.com/gpu.memory"
 	gpufp32GFLOPS       string = "nvidia.com/gpu.fp32.GFLOPS"
 	podRequestGpuMemory string = "customresource.com/gpuMemory"
@@ -171,7 +172,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 		}
 
 		if gpu.migLength == 0 {
-			var gpuAvailable float64 = float64(gpu.available) / 10.0
+			var gpuAvailable float64 = float64(gpu.available) / float64(maxAvailabilityGpu)
 			var gpuMemAvailable int = int(gpuAvailable * float64(gpu.mem))
 			var gpuFp32Available int = int(gpuAvailable * float64(gpu.fp32))
 
@@ -182,7 +183,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 			for j := 0; gpu.migLength > j; j++ {
 				migPartition := gpu.migSlices[j]
 
-				var migAvailable float64 = float64(migPartition.available) / 10.0
+				var migAvailable float64 = float64(migPartition.available) / float64(maxAvailabilityGpu)
 				var migMemAvailable int = int(migAvailable * float64(migPartition.mem))
 				var migFp32Available int = int(migAvailable * float64(migPartition.fp32))
 
@@ -196,4 +197,43 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 	}
 
 	return framework.NewStatus(framework.Unschedulable, "Recursos insuficientes")
+}
+
+func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
+
+	var totalGpuAvailable int = 0
+	numGpus, err := nodeGpus.getLength(nodeName)
+
+	if err != nil {
+		return 0, framework.NewStatus(framework.Error, err.Error())
+	}
+
+	for i := 0; numGpus > i; i++ {
+		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, i)
+
+		if err != nil {
+			return 0, framework.NewStatus(framework.Error, err.Error())
+		}
+
+		if gpu.migLength == 0 {
+			totalGpuAvailable += gpu.available
+		} else {
+			var totalMigAvailable int = 0
+			var migPartitions int = 0
+
+			for j := 0; gpu.migLength > j; j++ {
+				totalMigAvailable += gpu.migSlices[j].available
+
+				migPartitions++
+				j += gpu.migSlices[j].size - 1
+			}
+
+			totalGpuAvailable += totalMigAvailable / migPartitions
+		}
+	}
+
+	var res int64 = int64(maxAvailabilityGpu - (totalGpuAvailable / numGpus))
+	klog.V(0).Infof("%s Usage: %d", nodeName, res)
+
+	return res, framework.NewStatus(framework.Success)
 }

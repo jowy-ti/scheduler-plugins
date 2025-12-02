@@ -7,7 +7,7 @@ import (
 // Informacion de la particion de MIG
 type migSlice struct {
 	sync.RWMutex
-	available int
+	available int // sobre maxAvailabilityGpu
 	size      int
 	mem       int
 	fp32      int // GFLOPS

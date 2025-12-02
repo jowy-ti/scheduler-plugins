@@ -21,15 +21,15 @@ import (
 
 var _ framework.PreFilterPlugin = &MyScheduler{}
 var _ framework.FilterPlugin = &MyScheduler{}
-
-// var _ framework.ScorePlugin = &MyScheduler{}
+var _ framework.ScorePlugin = &MyScheduler{}
 var _ framework.ReservePlugin = &MyScheduler{}
 var _ framework.PreBindPlugin = &MyScheduler{}
 
 const (
-	preFilterStateKey     framework.StateKey = "PodResources"
-	Name                  string             = "MyScheduler"
-	annotationKeyAssigned string             = "deadline"
+	preFilterStateKey framework.StateKey = "PodResources"
+	Name              string             = "MyScheduler"
+	timeAssigned      string             = "deadline"
+	hardIsolation     string             = "hard-isolation"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -128,6 +128,34 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 	return enoughNodeResources(nodeName, availableNodeCpu, availableNodeMem, podRequests)
 }
 
+func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
+	return nodeGpusUsage(nodeName)
+}
+
+func (m *MyScheduler) ScoreExtensions() framework.ScoreExtensions {
+	return m
+}
+
+func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.CycleState, pod *v1.Pod, scores framework.NodeScoreList) *framework.Status {
+	var MaxScore int64 = framework.MinNodeScore
+
+	for _, nodeScore := range scores {
+		if nodeScore.Score > MaxScore {
+			MaxScore = nodeScore.Score
+		}
+	}
+
+	if MaxScore == 0 {
+		return framework.NewStatus(framework.Success)
+	}
+
+	for i, nodeScore := range scores {
+		scores[i].Score = int64(float64(framework.MaxNodeScore) * (float64(nodeScore.Score) / float64(MaxScore)))
+		klog.V(0).Infof("%s %s Normalize: %d", pod.Name, scores[i].Name, scores[i].Score)
+	}
+	return framework.NewStatus(framework.Success)
+}
+
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
 
 	kwok0 := "kwok-node-0"
@@ -138,18 +166,18 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	migPosition := 0
 	migUsage := 5
 
-	err := podsUsage.setPodResourcesGpuOnly(podName, kwok0, gpuPosition, gpuUsage)
+	err := podsUsage.setPodResourcesMigOnly(podName, kwok1, gpuPosition, migPosition, migUsage)
+
 	if err != nil {
 		klog.V(0).Infof("%v", err)
 	}
 
-	err = podsUsage.setPodResourcesMigOnly(podName, kwok1, gpuPosition, migPosition, migUsage)
-
+	err = podsUsage.setPodResourcesGpuOnly(podName, kwok0, gpuPosition, gpuUsage)
 	if err != nil {
 		klog.V(0).Infof("%v", err)
 	}
 	scanPodUsage(podName)
-	scanNode(kwok0)
+	scanNode(kwok1)
 
 	return framework.NewStatus(framework.Success)
 }
@@ -169,7 +197,7 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 	var timeInt int = int(30 + time.Now().Unix())
 	timeStr := strconv.Itoa(timeInt)
 
-	patchPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, annotationKeyAssigned, timeStr)
+	patchPayload := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, timeAssigned, timeStr)
 
 	_, err := m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 

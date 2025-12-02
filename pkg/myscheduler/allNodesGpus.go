@@ -30,7 +30,7 @@ func (p *allNodesGpus) setAllNodesGpus(gpus []*gpuSpec, nodeName string) error {
 }
 
 // Getters
-
+// Cantidad de GPUs en el nodo
 func (p *allNodesGpus) getLength(nodeName string) (int, error) {
 	p.RLock()
 	defer p.RUnlock()
@@ -47,17 +47,12 @@ func (p *allNodesGpus) getLength(nodeName string) (int, error) {
 }
 
 func (p *allNodesGpus) getGeneralGpuResources(nodeName string, gpuPosition int) (g *gpuSpec, err error) {
-	p.RLock()
-	defer p.RUnlock()
 
 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
 	if err != nil {
 		return nil, err
 	}
-
-	gpu.RLock()
-	defer gpu.RUnlock()
 
 	gpuCopy, err := gpu.deepCopy()
 
@@ -70,9 +65,6 @@ func (p *allNodesGpus) getGeneralGpuResources(nodeName string, gpuPosition int) 
 
 // Metodos para podsGpuUsage
 func (p *allNodesGpus) cleanResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
-
-	p.RLock()
-	defer p.RUnlock()
 
 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
@@ -92,9 +84,6 @@ func (p *allNodesGpus) cleanResourcesGpuOnly(nodeName string, gpuPosition int, g
 }
 
 func (p *allNodesGpus) cleanResourcesMigOnly(nodeName string, gpuPosition int, migPosition int, migUsage int) error {
-
-	p.RLock()
-	defer p.RUnlock()
 
 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
@@ -124,9 +113,6 @@ func (p *allNodesGpus) cleanResourcesMigOnly(nodeName string, gpuPosition int, m
 
 func (p *allNodesGpus) reserveResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
 
-	p.RLock()
-	defer p.RUnlock()
-
 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
 	if err != nil {
@@ -145,9 +131,6 @@ func (p *allNodesGpus) reserveResourcesGpuOnly(nodeName string, gpuPosition int,
 }
 
 func (p *allNodesGpus) reserveResourcesMigOnly(nodeName string, gpuPosition int, migPosition int, migUsage int) error {
-
-	p.RLock()
-	defer p.RUnlock()
 
 	gpu, err := p.getGpu(nodeName, gpuPosition)
 
@@ -178,6 +161,9 @@ func (p *allNodesGpus) reserveResourcesMigOnly(nodeName string, gpuPosition int,
 // Metodos privados no protegidos por Mutex!!
 // Lectura
 func (p *allNodesGpus) getGpu(nodeName string, gpuPosition int) (*gpuSpec, error) {
+
+	p.RLock()
+	defer p.RUnlock()
 
 	if _, exists := p.nodes[nodeName]; !exists {
 		return nil, fmt.Errorf("allNodesGpus.getGpu: no existe el nodo con nombre %s", nodeName)
