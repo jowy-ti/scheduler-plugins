@@ -63,6 +63,16 @@ func (p *allNodesGpus) getGeneralGpuResources(nodeName string, gpuPosition int) 
 	return gpuCopy, nil
 }
 
+// Verificadores
+func (p *allNodesGpus) isMig(nodeName string) (bool, error) {
+	gpu, err := p.getGpu(nodeName, 0)
+	if err != nil {
+		return false, err
+	}
+
+	return gpu.migLength > 0, nil
+}
+
 // Metodos para podsGpuUsage
 func (p *allNodesGpus) cleanResourcesGpuOnly(nodeName string, gpuPosition int, gpuUsage int) error {
 

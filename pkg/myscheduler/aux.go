@@ -2,24 +2,24 @@ package myscheduler
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
-	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
-	migInstances        string = "mig-instances"
-	gpuResourceName     string = "nvidia.com/gpu"
-	maxAvailabilityGpu  int    = 100
-	gpuMemory           string = "nvidia.com/gpu.memory"
-	gpufp32GFLOPS       string = "nvidia.com/gpu.fp32.GFLOPS"
-	podRequestGpuMemory string = "customresource.com/gpuMemory"
-	podRequestGpufp32   string = "customresource.com/gpufp32"
-	filterPodLabel      string = "app"
-	filterPodLabelValue string = "fake-pod"
+	migInstances        string          = "mig-instances"
+	gpuResourceName     v1.ResourceName = "nvidia.com/gpu"
+	maxAvailabilityGpu  int             = 100
+	gpuMemory           string          = "nvidia.com/gpu.memory"
+	gpufp32GFLOPS       string          = "nvidia.com/gpu.fp32.GFLOPS"
+	podRequestGpuMemory v1.ResourceName = "customresource.com/gpuMemory"
+	podRequestGpufp32   v1.ResourceName = "customresource.com/gpufp32"
+	filterPodLabel      string          = "app"
+	filterPodLabelValue string          = "fake-pod"
 )
 
 // Funciones auxiliares
@@ -60,7 +60,7 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 
 	var nodeName string = nodeInfo.GetName()
 	var nodeLabels map[string]string = nodeInfo.Node().Labels
-	var gpuCount int64 = nodeInfo.Allocatable.ScalarResources[v1.ResourceName(gpuResourceName)]
+	var gpuCount int64 = nodeInfo.Allocatable.ScalarResources[gpuResourceName]
 
 	labelMemoryGpu, ok := nodeLabels[gpuMemory]
 	if !ok {
@@ -176,7 +176,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 			var gpuMemAvailable int = int(gpuAvailable * float64(gpu.mem))
 			var gpuFp32Available int = int(gpuAvailable * float64(gpu.fp32))
 
-			if gpuMemAvailable > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpuMemory)]) && gpuFp32Available > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpufp32)]) {
+			if gpuMemAvailable > int(podRequests.ScalarResources[podRequestGpuMemory]) && gpuFp32Available > int(podRequests.ScalarResources[podRequestGpufp32]) {
 				return framework.NewStatus(framework.Success)
 			}
 		} else {
@@ -187,7 +187,7 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 				var migMemAvailable int = int(migAvailable * float64(migPartition.mem))
 				var migFp32Available int = int(migAvailable * float64(migPartition.fp32))
 
-				if migMemAvailable > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpuMemory)]) && migFp32Available > int(podRequests.ScalarResources[v1.ResourceName(podRequestGpufp32)]) {
+				if migMemAvailable > int(podRequests.ScalarResources[podRequestGpuMemory]) && migFp32Available > int(podRequests.ScalarResources[podRequestGpufp32]) {
 					return framework.NewStatus(framework.Success)
 				}
 
@@ -233,7 +233,56 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 	}
 
 	var res int64 = int64(maxAvailabilityGpu - (totalGpuAvailable / numGpus))
-	klog.V(0).Infof("%s Usage: %d", nodeName, res)
 
 	return res, framework.NewStatus(framework.Success)
+}
+
+func gpuReservation(podName string, nodeName string, podRequests *framework.Resource) error {
+
+	length, err := nodeGpus.getLength(nodeName)
+
+	if err != nil {
+		return err
+	}
+
+	var leastAvailableValue int = maxAvailabilityGpu + 1
+	var leastAvailableGpuPosition int = -1
+	var gpuAssgined int = 0
+	var fp32Req float64 = float64(podRequests.ScalarResources[podRequestGpufp32])
+	var memReq float64 = float64(podRequests.ScalarResources[podRequestGpuMemory])
+
+	for gpuPosition := 0; length > gpuPosition; gpuPosition++ {
+		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, gpuPosition)
+
+		if err != nil {
+			return err
+		}
+
+		var fp32Ratio float64 = fp32Req / float64(gpu.fp32)
+		var memRatio float64 = memReq / float64(gpu.mem)
+		var gpuReqRatio float64 = math.Max(fp32Ratio, memRatio)
+		var gpuReq int = int(gpuReqRatio * float64(maxAvailabilityGpu))
+
+		if gpu.available < leastAvailableValue && gpu.available >= gpuReq {
+			leastAvailableValue = gpu.available
+			leastAvailableGpuPosition = gpuPosition
+			gpuAssgined = gpuReq
+		}
+	}
+
+	if leastAvailableGpuPosition < 0 || leastAvailableGpuPosition >= length || gpuAssgined <= 0 {
+		return fmt.Errorf("no se ha encontrado adecuadamente una gpu para realizar la reserva")
+	}
+
+	err = podsUsage.setPodResourcesGpuOnly(podName, nodeName, leastAvailableGpuPosition, gpuAssgined)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func migReservation(podName string, nodeName string, podRequests *framework.Resource) error {
+	return nil
 }

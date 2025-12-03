@@ -156,28 +156,34 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 	return framework.NewStatus(framework.Success)
 }
 
-func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, p *v1.Pod, nodeName string) *framework.Status {
+func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
-	kwok0 := "kwok-node-0"
-	kwok1 := "kwok-node-1"
-	podName := p.Name
-	gpuPosition := 0
-	gpuUsage := 3
-	migPosition := 0
-	migUsage := 5
-
-	err := podsUsage.setPodResourcesMigOnly(podName, kwok1, gpuPosition, migPosition, migUsage)
+	node := "kwok-node-1"
+	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
-		klog.V(0).Infof("%v", err)
+		return framework.NewStatus(framework.Unschedulable, "Fallo al leer 'preFilterState' en 'cycleState'")
 	}
 
-	err = podsUsage.setPodResourcesGpuOnly(podName, kwok0, gpuPosition, gpuUsage)
+	var podRequests *framework.Resource = &preFilterState.resources
+	mig, err := nodeGpus.isMig(node)
+
 	if err != nil {
-		klog.V(0).Infof("%v", err)
+		return framework.NewStatus(framework.Error, err.Error())
 	}
-	scanPodUsage(podName)
-	scanNode(kwok1)
+
+	if !mig {
+		err = gpuReservation(pod.Name, node, podRequests)
+	} else {
+		err = migReservation(pod.Name, node, podRequests)
+	}
+
+	if err != nil {
+		return framework.NewStatus(framework.Error, err.Error())
+	}
+
+	scanPodUsage(pod.Name)
+	scanNode(node)
 
 	return framework.NewStatus(framework.Success)
 }
