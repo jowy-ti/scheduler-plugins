@@ -7,22 +7,26 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
+	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 const (
-	migInstances        string          = "mig-instances"
-	gpuResourceName     v1.ResourceName = "nvidia.com/gpu"
-	maxAvailabilityGpu  int             = 100
-	gpuMemory           string          = "nvidia.com/gpu.memory"
-	gpufp32GFLOPS       string          = "nvidia.com/gpu.fp32.GFLOPS"
-	podRequestGpuMemory v1.ResourceName = "customresource.com/gpuMemory"
-	podRequestGpufp32   v1.ResourceName = "customresource.com/gpufp32"
-	filterPodLabel      string          = "app"
-	filterPodLabelValue string          = "fake-pod"
+	migInstances                     string          = "mig-instances"
+	gpuResourceName                  v1.ResourceName = "nvidia.com/gpu"
+	maxAvailabilityGpu               int             = 100
+	gpuMemory                        string          = "nvidia.com/gpu.memory"
+	gpufp32GFLOPS                    string          = "nvidia.com/gpu.fp32.GFLOPS"
+	podRequestGpuMemory              v1.ResourceName = "customresource.com/gpuMemory"
+	podRequestGpufp32                v1.ResourceName = "customresource.com/gpufp32"
+	filterPodLabel                   string          = "app"
+	filterPodLabelValue              string          = "fake-pod"
+	MIG_PROFILES_7_INSTANCES_ROWS    int             = 19
+	MIG_PROFILES_7_INSTANCES_COLUMNS int             = 7
+	invalidInstanceSize              int             = -1
 )
 
-var MIG_PROFILES_7_INSTANCES [19][7]int = [19][7]int{
+var MIG_PROFILES_7_INSTANCES [MIG_PROFILES_7_INSTANCES_ROWS][MIG_PROFILES_7_INSTANCES_COLUMNS]int = [MIG_PROFILES_7_INSTANCES_ROWS][MIG_PROFILES_7_INSTANCES_COLUMNS]int{
 	// Cfg | S0 | S1 | S2 | S3 | S4 | S5 | S6 |  Descripción Visual
 	// -------------------------------------------------------------------
 	/* 1  */ {7, 0, 0, 0, 0, 0, 0}, // 1x 7g (Toda la fila verde)
@@ -328,8 +332,16 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 		}
 
 		var partitionsInUse []int = gpu.partitionsOccuped()
-		var geometriesAvailable []int = possibleGeometries(partitionsInUse)
-		geometryRow, migPosition, migUseReq, availableGpu := gpu.bestGeometry(geometriesAvailable, podRequests)
+		klog.V(0).Info("Occuped mig pos:")
+		for i := 0; len(partitionsInUse) > i; i++ {
+			klog.V(0).Infof("- %d", partitionsInUse[i])
+		}
+		var geometriesAvailable []int = gpu.possibleGeometries(partitionsInUse)
+		klog.V(0).Info("Geometries available:")
+		for i := 0; len(geometriesAvailable) > i; i++ {
+			klog.V(0).Infof("- %d", geometriesAvailable[i])
+		}
+		geometryRow, migPosition, migUseReq, availableGpu := gpu.bestGeometry(geometriesAvailable, partitionsInUse, podRequests)
 
 		if leastAvailability > availableGpu {
 			defGpuPosition = gpuPosition
@@ -347,11 +359,7 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	}
 
 	gpu.reconfiguration(defGeometryRow)
+	defMigUseReq = 10
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
-	return nil
-}
-
-// Devuelve una lista de las filas que representan las posibles geometrias, dadas unas particiones en uso inmutables
-func possibleGeometries(partitionsInUse []int) []int {
 	return nil
 }
