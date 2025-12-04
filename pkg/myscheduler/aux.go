@@ -22,6 +22,30 @@ const (
 	filterPodLabelValue string          = "fake-pod"
 )
 
+var MIG_PROFILES_7_INSTANCES [19][7]int = [19][7]int{
+	// Cfg | S0 | S1 | S2 | S3 | S4 | S5 | S6 |  Descripción Visual
+	// -------------------------------------------------------------------
+	/* 1  */ {7, 0, 0, 0, 0, 0, 0}, // 1x 7g (Toda la fila verde)
+	/* 2  */ {4, 0, 0, 0, 3, 0, 0}, // 4g (Naranja) + 3g (Amarillo)
+	/* 3  */ {4, 0, 0, 0, 2, 0, 1}, // 4g (Naranja) + 2g (Azul) + 1g
+	/* 4  */ {4, 0, 0, 0, 1, 1, 1}, // 4g (Naranja) + 3x 1g
+	/* 5  */ {3, 0, 0, 3, 0, 0, -1}, // 3g (Amarillo) + 3g (Amarillo) + GRIS
+	/* 6  */ {3, 0, 0, 2, 0, 1, -1}, // 3g (Amarillo) + 2g (Azul) + 1g + GRIS
+	/* 7  */ {3, 0, 0, 1, 1, 1, -1}, // 3g (Amarillo) + 3x 1g + GRIS
+	/* 8  */ {2, 0, 2, 0, 3, 0, 0}, // 2g + 2g + 3g (Amarillo al final)
+	/* 9  */ {2, 0, 1, 1, 3, 0, 0}, // 2g + 1g + 1g + 3g (Amarillo al final)
+	/* 10 */ {1, 1, 2, 0, 3, 0, 0}, // 1g + 1g + 2g + 3g (Amarillo al final)
+	/* 11 */ {1, 1, 1, 1, 3, 0, 0}, // 4x 1g + 3g (Amarillo al final)
+	/* 12 */ {2, 0, 2, 0, 2, 0, 1}, // 2g + 2g + 2g + 1g
+	/* 13 */ {2, 0, 1, 1, 2, 0, 1}, // 2g + 1g + 1g + 2g + 1g
+	/* 14 */ {1, 1, 2, 0, 2, 0, 1}, // 1g + 1g + 2g + 2g + 1g
+	/* 15 */ {2, 0, 1, 1, 1, 1, 1}, // 2g + 5x 1g
+	/* 16 */ {1, 1, 2, 0, 1, 1, 1}, // 1g + 1g + 2g + 3x 1g
+	/* 17 */ {1, 1, 1, 1, 2, 0, 1}, // 4x 1g + 2g + 1g
+	/* 18 */ {1, 1, 1, 1, 1, 2, 0}, // 5x 1g + 2g (Azul al final ocupando S5 y S6)
+	/* 19 */ {1, 1, 1, 1, 1, 1, 1}, // 7x 1g (Todo rosa)
+}
+
 // Funciones auxiliares
 
 // onDelete
@@ -284,5 +308,50 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 }
 
 func migReservation(podName string, nodeName string, podRequests *framework.Resource) error {
+
+	var defGeometryRow int = -1
+	var defGpuPosition int = -1
+	var defMigPosition int = -1
+	var defMigUseReq int = -1
+	var leastAvailability int = maxAvailabilityGpu + 1
+	length, err := nodeGpus.getLength(nodeName)
+
+	if err != nil {
+		return err
+	}
+
+	for gpuPosition := 0; length > gpuPosition; gpuPosition++ {
+		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, gpuPosition)
+
+		if err != nil {
+			return err
+		}
+
+		var partitionsInUse []int = gpu.partitionsOccuped()
+		var geometriesAvailable []int = possibleGeometries(partitionsInUse)
+		geometryRow, migPosition, migUseReq, availableGpu := gpu.bestGeometry(geometriesAvailable, podRequests)
+
+		if leastAvailability > availableGpu {
+			defGpuPosition = gpuPosition
+			defMigPosition = migPosition
+			defMigUseReq = migUseReq
+			leastAvailability = availableGpu
+			defGeometryRow = geometryRow
+		}
+	}
+
+	gpu, err := nodeGpus.getGeneralGpuResources(nodeName, defGpuPosition)
+
+	if err != nil {
+		return err
+	}
+
+	gpu.reconfiguration(defGeometryRow)
+	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
+	return nil
+}
+
+// Devuelve una lista de las filas que representan las posibles geometrias, dadas unas particiones en uso inmutables
+func possibleGeometries(partitionsInUse []int) []int {
 	return nil
 }

@@ -13,6 +13,13 @@ type migSlice struct {
 	fp32      int // GFLOPS
 }
 
+// InstanciaMigNoDisponible {
+// 	available: 	max
+// 	size:		size
+// 	mem      	0
+// 	fp32     	0
+// }
+
 // Metodos migSlice
 func newMigSlice() *migSlice {
 	return &migSlice{}

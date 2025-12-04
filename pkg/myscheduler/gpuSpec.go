@@ -3,6 +3,8 @@ package myscheduler
 import (
 	"fmt"
 	"sync"
+
+	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
 // Informacion de GPU
@@ -39,6 +41,21 @@ func (g *gpuSpec) setGpuSpecMigOnly(migPartition []*migSlice) error {
 	}
 	g.migSlices = migPartition
 	return nil
+}
+
+// Informacion
+// Se devuelve una lista de las posiciones MIG ocupadas para una GPU
+func (g *gpuSpec) partitionsOccuped() []int {
+	return nil
+}
+
+func (g *gpuSpec) bestGeometry(geometries []int, podRequests *framework.Resource) (geometryRow int, migPosition int, migUsage int, availableGpu int) {
+	return 0, 0, 0, 0
+}
+
+// Modificadores
+func (g *gpuSpec) reconfiguration(geometryRow int) {
+
 }
 
 // Metodos privados para 'allNodesGpus' no protegidos con RWMutex
