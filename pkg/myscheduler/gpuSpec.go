@@ -72,11 +72,11 @@ func (g *gpuSpec) possibleGeometries(partitionsInUse []int) []int {
 
 	if lenghtPartitionsInUse == 0 {
 
-		for i := 0; MIG_PROFILES_7_INSTANCES_ROWS > i; i++ {
+		for i := 0; MIG_7_ROWS > i; i++ {
 			geometriesAvailable = append(geometriesAvailable, i)
 		}
 	} else {
-		for i := 0; MIG_PROFILES_7_INSTANCES_ROWS > i; i++ {
+		for i := 0; MIG_7_ROWS > i; i++ {
 			var okGeometry bool = true
 
 			for j := 0; lenghtPartitionsInUse > j; j++ {
@@ -97,38 +97,59 @@ func (g *gpuSpec) possibleGeometries(partitionsInUse []int) []int {
 	return geometriesAvailable
 }
 
-func (g *gpuSpec) bestGeometry(geometries []int, partitionsInUse []int, podRequests *framework.Resource) (geometryRow int, migPosition int, migUsage int, availableGpu int) {
+// Esta función se ha hecho pensando en pofiles MIG de 7 instancias
+func (g *gpuSpec) bestGeometry(geometries []int, podRequests *framework.Resource) (geometryRow int, migPosition int, migUsage int, availableGpu int) {
 
-	var geometriesLength int = len(geometries)
-	var fp32Req int = int(podRequests.ScalarResources[podRequestGpufp32])
-	var memReq int = int(podRequests.ScalarResources[podRequestGpuMemory])
-	var defGeometry int = -1
+	var fp32Req float64 = float64(podRequests.ScalarResources[podRequestGpufp32])
+	var memReq float64 = float64(podRequests.ScalarResources[podRequestGpuMemory])
+	var defGeometryPos int = -1
 	var defMigPosition int = -1
-	var migInstances int = MIG_PROFILES_7_INSTANCES_COLUMNS
+	var defMigReq int = -1
+	var migReq int
+	var migAvailable int
+	var leastAvailableValue int = maxAvailabilityGpu + 1
+	var geometriesLength int = len(geometries)
+	var allConfAvailability []int = make([]int, geometriesLength)
 
 	for i := 0; geometriesLength > i; i++ {
 		var geometryPos int = geometries[i]
-		var indexPartitionInUse int = 0
+		var confAvailability int = 0
 
-		for j := 0; MIG_PROFILES_7_INSTANCES_COLUMNS > j; j++ {
+		for j := 0; MIG_7_COLUMNS > j; j++ {
 			var migSize int = MIG_PROFILES_7_INSTANCES[geometryPos][j]
 
 			if migSize == invalidInstanceSize {
 				continue
 			}
 
-			if partitionsInUse[indexPartitionInUse] == j {
-
+			if g.migSlices[j] != nil && g.migSlices[j].size == migSize {
+				var migPartition *migSlice = g.migSlices[j]
+				migReq = gpuResourcesRequest(fp32Req, float64(migPartition.fp32), memReq, float64(migPartition.mem))
+				migAvailable = migPartition.available - migReq
 			} else {
-				var ratioSize float64 = float64(migSize) / float64(migInstances)
-
+				// Hay que hacer tabla del mig profile
+				// var ratioSizeFp32 float64 = float64(migSize) / MIG_7_SM_FRACTION
+				// var ratioSizeMem float64 = float64(migSize) / MIG_7_MEMORY_FRACTION
+				// var migFp32 float64 = ratioSizeFp32 * float64(g.fp32)
+				// var migMem float64 = ratioSizeMem * float64(g.mem)
+				migReq = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
+				migAvailable = maxAvailabilityGpu - migReq
 			}
 
+			if leastAvailableValue > migAvailable && migAvailable >= 0 {
+				leastAvailableValue = migAvailable
+				defGeometryPos = i
+				defMigPosition = j
+				defMigReq = migReq
+			}
+
+			confAvailability += migAvailable * migSize
 			j += migSize - 1
 		}
-	}
 
-	return 0, 0, 0, 0
+		allConfAvailability = append(allConfAvailability, confAvailability/MIG_7_COLUMNS)
+	}
+	return geometries[defGeometryPos], defMigPosition, defMigReq, allConfAvailability[defGeometryPos]
 }
 
 func (g *gpuSpec) reconfiguration(geometryRow int) {
