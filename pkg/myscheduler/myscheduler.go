@@ -13,7 +13,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -114,7 +113,7 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 	_, ok := nodeGpus.nodes[nodeName]
 
 	if !ok {
-		klog.V(0).Infof("Not found node %s", nodeName)
+		// klog.V(0).Infof("Not found node %s", nodeName)
 		err := gpuNodeBuild(nodeInfo)
 
 		if err != nil {
@@ -151,7 +150,7 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 
 	for i, nodeScore := range scores {
 		scores[i].Score = int64(float64(framework.MaxNodeScore) * (float64(nodeScore.Score) / float64(MaxScore)))
-		klog.V(0).Infof("%s %s Normalize: %d", pod.Name, scores[i].Name, scores[i].Score)
+		// klog.V(0).Infof("%s %s Normalize: %d", pod.Name, scores[i].Name, scores[i].Score)
 	}
 	return framework.NewStatus(framework.Success)
 }
@@ -182,8 +181,8 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
-	scanPodUsage(pod.Name)
-	scanNode(node)
+	// scanPodUsage(pod.Name)
+	// scanNode(node)
 
 	return framework.NewStatus(framework.Success)
 }

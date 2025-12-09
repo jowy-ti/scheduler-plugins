@@ -19,13 +19,23 @@ func newAllNodesGpus() *allNodesGpus {
 }
 
 // Setters
-func (p *allNodesGpus) setAllNodesGpus(gpus []*gpuSpec, nodeName string) error {
+func (p *allNodesGpus) setNodeGpus(gpus []*gpuSpec, nodeName string) error {
 	if gpus == nil {
-		return fmt.Errorf("allNodesGpus.setAllNodesGpus: no se puede construir allNodesGpus si []*gpuSpec es nil")
+		return fmt.Errorf("allNodesGpus.setAllNodesGpus: no se puede construir la información del nodo %s si []*gpuSpec es nil", nodeName)
 	}
 	p.Lock()
 	defer p.Unlock()
 	p.nodes[nodeName] = gpus
+	return nil
+}
+
+func (p *allNodesGpus) setSingleNodeGpu(gpu *gpuSpec, nodeName string, gpuPos int) error {
+	if gpu == nil {
+		return fmt.Errorf("allNodesGpus.setSingleNodeGpu: no se puede añadir la gpu en el nodo %s si *gpuSpec es nil", nodeName)
+	}
+	p.Lock()
+	defer p.Unlock()
+	p.nodes[nodeName][gpuPos] = gpu
 	return nil
 }
 
@@ -186,32 +196,3 @@ func (p *allNodesGpus) getGpu(nodeName string, gpuPosition int) (*gpuSpec, error
 	}
 	return gpus[gpuPosition], nil
 }
-
-// func (p *allNodesGpus) getMigResources(nodeName string, gpuPosition int, migPosition int) (m *migSlice, err error) {
-// 	p.RLock()
-// 	defer p.RUnlock()
-
-// 	gpu, err := p.getGpu(nodeName, gpuPosition)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	gpu.RLock()
-// 	defer gpu.RUnlock()
-
-// 	migPartition, err := gpu.getMigSlice(migPosition)
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	migPartitionCopy := &migSlice{
-// 		available: migPartition.available,
-// 		size:      migPartition.size,
-// 		mem:       migPartition.mem,
-// 		fp32:      migPartition.fp32,
-// 	}
-
-// 	return migPartitionCopy, nil
-// }

@@ -2,7 +2,6 @@ package myscheduler
 
 import (
 	"fmt"
-	"math"
 	"sync"
 
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
@@ -23,7 +22,7 @@ func newGpuSpec() *gpuSpec {
 	return &gpuSpec{}
 }
 
-// Unicamente usarlo en estructuras locales
+// Unicamente usar los siguientes métodos en estructuras locales
 
 // Añade la información general
 func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, migLength int) error {
@@ -114,6 +113,7 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 
 	for i := 0; geometriesLength > i; i++ {
 		var geometryPos int = geometries[i]
+		// klog.V(0).Infof("Geometry: %d", geometryPos)
 
 		for j := 0; MIG_7_COLUMNS > j; j++ {
 			var migFp32 float64
@@ -132,20 +132,23 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 				migMem = float64(migPartition.mem)
 			} else {
 				migAvailable = maxAvailabilityGpu
-				migFp32 = MIG_7_MEMORY_FRACTION[migSize] * float64(g.fp32)
-				migMem = MIG_7_COMPUTE_FRACTION[migSize] * float64(g.mem)
+				migFp32 = MIG_7_COMPUTE_FRACTION[migSize] * float64(g.fp32)
+				migMem = MIG_7_MEMORY_FRACTION[migSize] * float64(g.mem)
 			}
-
+			// klog.V(0).Infof("- migPartition: %d", j)
 			var migReq int = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
-			var gpuReq int = migResourcesToGpuResources(migReq, migFp32, migMem, g.fp32, g.mem)
-			// suma a gpuReq de los recursos inutiles
+			// klog.V(0).Infof("  - migReq: %d", migReq)
+			// Se calcula el uso de GPU en base al de la partición mig y se suma la porción que no es posible utilizar debido a la geometría
+			var gpuReq int = migResourcesToGpuResources(migReq, migFp32, migMem, g.fp32, g.mem) + MIG_PROFILES_7_RESOURCES_UNUSED[geometryPos]
+			// klog.V(0).Infof("  - gpuReq: %d", gpuReq)
 			var migLeft int = migAvailable - migReq
+			// klog.V(0).Infof("  - migLeft: %d", migLeft)
 
 			if migLeft >= 0 {
 				if leastGpuReq > gpuReq || (leastGpuReq == gpuReq && leastMigLeft > migLeft) {
 					leastGpuReq = gpuReq
 					leastMigLeft = migLeft
-					defGeometry = geometries[i]
+					defGeometry = geometryPos
 					defMigPosition = j
 					defMigReq = migReq
 				}
@@ -159,7 +162,36 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 
 func (g *gpuSpec) reconfiguration(geometryRow int) {
 
+	var geometry [MIG_7_COLUMNS]int = MIG_PROFILES_7_INSTANCES[geometryRow]
+	var migGeometry []*migSlice = make([]*migSlice, MIG_7_COLUMNS)
+
+	for i := 0; MIG_7_COLUMNS > i; i++ {
+		var migMemory float64
+		var migFp32 float64
+		var availability int
+		var migSize int = geometry[i]
+
+		if migSize == invalidInstanceSize {
+			continue
+		}
+
+		if g.migSlices[i] != nil && migSize == g.migSlices[i].size {
+			availability = g.migSlices[i].available
+		} else {
+			availability = maxAvailabilityGpu
+		}
+
+		migMemory = float64(g.mem) * MIG_7_MEMORY_FRACTION[migSize]
+		migFp32 = float64(g.fp32) * MIG_7_COMPUTE_FRACTION[migSize]
+
+		migGeometry[i] = newMigSlice()
+		migGeometry[i].setInfoMigSlice(migSize, int(migMemory), int(migFp32), availability)
+		i += migSize - 1
+	}
+	g.setGpuSpecMigOnly(migGeometry)
 }
+
+// Unicamente usar los siguientes métodos en estructuras locales EOF
 
 // Metodos privados para 'allNodesGpus'
 func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
@@ -215,16 +247,4 @@ func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
 	}
 
 	return gpu, nil
-}
-
-// Funciones auxiliares
-func migResourcesToGpuResources(migReq int, migFp32 float64, migMem float64, gpuFp32 int, gpuMem int) int {
-	var migReqRatio float64 = float64(migReq) / float64(maxAvailabilityGpu)
-	var fp32Req float64 = migReqRatio * migFp32
-	var memReq float64 = migReqRatio * migMem
-	var gpuFp32Ratio float64 = fp32Req / float64(gpuFp32)
-	var gpuMemRatio float64 = memReq / float64(gpuMem)
-	var gpuReq float64 = (gpuFp32Ratio + gpuMemRatio) / 2.0
-
-	return int(math.Ceil(gpuReq))
 }

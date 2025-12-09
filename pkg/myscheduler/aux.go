@@ -14,7 +14,7 @@ import (
 const (
 	migInstances        string          = "mig-instances"
 	gpuResourceName     v1.ResourceName = "nvidia.com/gpu"
-	maxAvailabilityGpu  int             = 100
+	maxAvailabilityGpu  int             = 1000
 	gpuMemory           string          = "nvidia.com/gpu.memory"
 	gpufp32GFLOPS       string          = "nvidia.com/gpu.fp32.GFLOPS"
 	podRequestGpuMemory v1.ResourceName = "customresource.com/gpuMemory"
@@ -65,6 +65,30 @@ var MIG_7_COMPUTE_FRACTION = map[int]float64{
 	4: 4.0 / 7.0,
 	7: 1.0,
 }
+
+var MIG_PROFILES_7_RESOURCES_UNUSED = func() [MIG_7_ROWS]int {
+	var resourcesUnused [MIG_7_ROWS]int
+
+	for i := 0; MIG_7_ROWS > i; i++ {
+		var resourcesUsed float64 = 0
+
+		for j := 0; MIG_7_COLUMNS > j; j++ {
+			var migSize int = MIG_PROFILES_7_INSTANCES[i][j]
+
+			if migSize == invalidInstanceSize {
+				continue
+			}
+
+			resourcesUsed += MIG_7_MEMORY_FRACTION[migSize] + MIG_7_COMPUTE_FRACTION[migSize]
+
+			j += migSize - 1
+		}
+		var unused float64 = float64(maxAvailabilityGpu) - ((resourcesUsed / 2.0) * float64(maxAvailabilityGpu))
+		resourcesUnused[i] = int(unused)
+	}
+
+	return resourcesUnused
+}()
 
 // Funciones auxiliares
 
@@ -147,12 +171,12 @@ func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
 		for i := 0; int(gpuCount) > i; i++ {
 			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
 			migGeometry[0] = newMigSlice()
-			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu))
+			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu), maxAvailabilityGpu)
 			gpus[i].setGpuSpecMigOnly(migGeometry)
 		}
 	}
 
-	nodeGpus.setAllNodesGpus(gpus, nodeName)
+	nodeGpus.setNodeGpus(gpus, nodeName)
 	return nil
 }
 
@@ -262,27 +286,19 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 		if gpu.migLength == 0 {
 			totalGpuAvailable += gpu.available
 		} else {
-			var totalMigAvailable int = 0
 
-			// Modificar como se obtiene el MigAvailable!!!!!!
-			// Hay que tener en cuenta las particiones inválidas y recursos inalcanzables
-			//
-			//
-			//
-			//
 			for j := 0; gpu.migLength > j; j++ {
-				totalMigAvailable += gpu.migSlices[j].available * gpu.migSlices[j].size
+				var migPartition *migSlice = gpu.migSlices[j]
+				totalGpuAvailable += migResourcesToGpuResources(migPartition.available, float64(migPartition.fp32), float64(migPartition.mem), gpu.fp32, gpu.mem)
 
 				j += gpu.migSlices[j].size - 1
 			}
-
-			totalGpuAvailable += totalMigAvailable / gpu.migLength
 		}
 	}
 
-	var res int64 = int64(maxAvailabilityGpu - (totalGpuAvailable / numGpus))
+	var res int = maxAvailabilityGpu - (totalGpuAvailable / numGpus)
 
-	return res, framework.NewStatus(framework.Success)
+	return int64(res), framework.NewStatus(framework.Success)
 }
 
 func gpuReservation(podName string, nodeName string, podRequests *framework.Resource) error {
@@ -294,8 +310,8 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 	}
 
 	var leastAvailableValue int = maxAvailabilityGpu + 1
-	var leastAvailableGpuPosition int = -1
-	var gpuAssgined int = 0
+	var leastAvailableGpuPosition int
+	var gpuAssgined int
 	var fp32Req float64 = float64(podRequests.ScalarResources[podRequestGpufp32])
 	var memReq float64 = float64(podRequests.ScalarResources[podRequestGpuMemory])
 
@@ -350,14 +366,14 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 		}
 
 		var partitionsInUse []int = gpu.partitionsOccuped()
-		klog.V(0).Info("Occuped mig pos:")
+		// klog.V(0).Info("Occuped mig pos:")
 		for i := 0; len(partitionsInUse) > i; i++ {
-			klog.V(0).Infof("- %d", partitionsInUse[i])
+			// klog.V(0).Infof("- %d", partitionsInUse[i])
 		}
 		var geometriesAvailable []int = gpu.possibleGeometries(partitionsInUse)
-		klog.V(0).Info("Geometries available:")
+		// klog.V(0).Info("Geometries available:")
 		for i := 0; len(geometriesAvailable) > i; i++ {
-			klog.V(0).Infof("- %d", geometriesAvailable[i])
+			// klog.V(0).Infof("- %d", geometriesAvailable[i])
 		}
 		geometryRow, migPosition, migLeft, gpuReq, migReq := gpu.bestGeometryForMig7(geometriesAvailable, podRequests)
 
@@ -380,9 +396,18 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	if err != nil {
 		return err
 	}
+	klog.V(0).Info("Final results:")
+	klog.V(0).Infof("- defGeometry: %d", defGeometryRow)
+	klog.V(0).Infof("- gpuPosition: %d", defGpuPosition)
+	klog.V(0).Infof("- migPartition: %d", defMigPosition)
+	klog.V(0).Infof("- migRequested: %d", defMigUseReq)
+	klog.V(0).Infof("- leastMigLeft: %d", leastMigLeft)
+	klog.V(0).Infof("- leastGpuReq: %d", leastGpuReq)
 
 	gpu.reconfiguration(defGeometryRow)
+	nodeGpus.setSingleNodeGpu(gpu, nodeName, defGpuPosition)
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
+	scanNode(nodeName)
 	return nil
 }
 
@@ -390,7 +415,19 @@ func gpuResourcesRequest(fp32Req float64, gpuFp32 float64, memReq float64, gpuMe
 	var fp32Ratio float64 = fp32Req / gpuFp32
 	var memRatio float64 = memReq / gpuMem
 	var gpuReqRatio float64 = math.Max(fp32Ratio, memRatio)
-	var gpuReq float64 = math.Ceil(gpuReqRatio * float64(maxAvailabilityGpu))
+	var gpuReq float64 = math.Ceil(gpuReqRatio * float64(maxAvailabilityGpu)) // Como mínimo se debe dar los pedido por el pod
 
 	return int(gpuReq)
+}
+
+func migResourcesToGpuResources(migUse int, migFp32 float64, migMem float64, gpuFp32 int, gpuMem int) int {
+	var migReqRatio float64 = float64(migUse) / float64(maxAvailabilityGpu)
+	var fp32Req float64 = migReqRatio * migFp32
+	var memReq float64 = migReqRatio * migMem
+	var gpuFp32Ratio float64 = fp32Req / float64(gpuFp32)
+	var gpuMemRatio float64 = memReq / float64(gpuMem)
+	var gpuReq float64 = ((gpuFp32Ratio + gpuMemRatio) / 2.0) * float64(maxAvailabilityGpu)
+
+	// No se utiliza el Ceil para prevenir redondeos: 7.00000000001 -> 8 los cuales suele pasar cuando la relación es exacta y float64 no es 100% preciso
+	return int(math.Round(gpuReq))
 }
