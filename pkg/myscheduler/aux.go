@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/tools/cache"
 	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
@@ -86,98 +85,25 @@ var MIG_PROFILES_7_RESOURCES_UNUSED = func() [MIG_7_ROWS]int {
 		var unused float64 = float64(maxAvailabilityGpu) - ((resourcesUsed / 2.0) * float64(maxAvailabilityGpu))
 		resourcesUnused[i] = int(unused)
 	}
-
 	return resourcesUnused
 }()
 
 // Funciones auxiliares
 
-// onDelete
-
-func onDelete(obj interface{}) {
-	pod, ok := obj.(*v1.Pod)
-
-	if !ok {
-		unknown, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			return
-		}
-		pod, ok = unknown.Obj.(*v1.Pod)
-		if !ok {
-			return
-		}
-	}
-	var podName string = pod.Name
-	podsUsage.cleanPodResources(podName)
-}
-
-// FilterFunc
-
-func filterFunc(obj interface{}) bool {
-	pod, ok := obj.(*v1.Pod)
-
-	if !ok {
-		return false
-	}
-	var podLabels map[string]string = pod.Labels
-	return podLabels[filterPodLabel] == filterPodLabelValue
-}
-
-// Construccion de la estructura de datos en cache de los nodos
-func gpuNodeBuild(nodeInfo *framework.NodeInfo) error {
-
-	var nodeName string = nodeInfo.GetName()
-	var nodeLabels map[string]string = nodeInfo.Node().Labels
-	var gpuCount int64 = nodeInfo.Allocatable.ScalarResources[gpuResourceName]
-
-	labelMemoryGpu, ok := nodeLabels[gpuMemory]
-	if !ok {
-		return fmt.Errorf("label %s not found in node %s", gpuMemory, nodeName)
-	}
-
-	memoryGpu, err := strconv.ParseInt(labelMemoryGpu, 10, 0)
-	if err != nil {
-		return fmt.Errorf("error to convert string to int for string %s in node %s", labelMemoryGpu, nodeName)
-	}
-
-	labelfp32Gpu, ok := nodeLabels[gpufp32GFLOPS]
-	if !ok {
-		return fmt.Errorf("label %s not found in node %s", gpufp32GFLOPS, nodeName)
-	}
-
-	fp32Gpu, err := strconv.ParseInt(labelfp32Gpu, 10, 0)
-	if err != nil {
-		return fmt.Errorf("error to convert string to int for string %s in node %s", labelfp32Gpu, nodeName)
-	}
-
-	labelInstances, ok := nodeLabels[migInstances]
-	if !ok {
-		return fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
-	}
-	numInstances, err := strconv.ParseInt(labelInstances, 10, 0)
+// Obtencion del StateData dentro del CycleState
+func getPreFilterState(cycleState *framework.CycleState) (*PreFilterState, error) {
+	stateData, err := cycleState.Read(preFilterStateKey)
 
 	if err != nil {
-		return fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
+		// preFilterState doesn't exist, likely PreFilter wasn't invoked.
+		return nil, fmt.Errorf("error reading %q from cycleState: %w", preFilterStateKey, err)
 	}
 
-	var gpus []*gpuSpec = make([]*gpuSpec, gpuCount)
-
-	for i := int64(0); gpuCount > i; i++ {
-		gpus[i] = newGpuSpec()
-		gpus[i].setGpuSpecGpuOnly(int(memoryGpu), int(fp32Gpu), int(numInstances))
+	preFilterState, ok := stateData.(*PreFilterState)
+	if !ok {
+		return nil, fmt.Errorf("%+v  convert to NodeResourcesFit.preFilterState error", stateData)
 	}
-
-	if numInstances > 0 {
-		for i := 0; int(gpuCount) > i; i++ {
-			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
-			migGeometry[0] = newMigSlice()
-			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu), maxAvailabilityGpu)
-			gpus[i].setGpuSpecMigOnly(migGeometry)
-		}
-	}
-
-	nodeGpus.setNodeGpus(gpus, nodeName)
-	return nil
+	return preFilterState, nil
 }
 
 // Computa el total de recursos que solicita un pod
@@ -201,24 +127,67 @@ func computePodResourceRequest(pod *v1.Pod) *framework.Resource {
 	return result
 }
 
-// Obtencion del StateData dentro del CycleState
-func getPreFilterState(cycleState *framework.CycleState) (*PreFilterState, error) {
-	stateData, err := cycleState.Read(preFilterStateKey)
+// Extrae información del nodo para poder construirlo
+func extractNodeInfo(nodeLabels map[string]string, nodeName string) (gpuMem int, gpuFp32 int, nInstances int, err error) {
+
+	labelMemoryGpu, ok := nodeLabels[gpuMemory]
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("label %s not found in node %s", gpuMemory, nodeName)
+	}
+
+	memoryGpu, err := strconv.ParseInt(labelMemoryGpu, 10, 0)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("error to convert string to int for string %s in node %s", labelMemoryGpu, nodeName)
+	}
+
+	labelfp32Gpu, ok := nodeLabels[gpufp32GFLOPS]
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("label %s not found in node %s", gpufp32GFLOPS, nodeName)
+	}
+
+	fp32Gpu, err := strconv.ParseInt(labelfp32Gpu, 10, 0)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("error to convert string to int for string %s in node %s", labelfp32Gpu, nodeName)
+	}
+
+	labelInstances, ok := nodeLabels[migInstances]
+	if !ok {
+		return 0, 0, 0, fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
+	}
+	numInstances, err := strconv.ParseInt(labelInstances, 10, 0)
 
 	if err != nil {
-		// preFilterState doesn't exist, likely PreFilter wasn't invoked.
-		return nil, fmt.Errorf("error reading %q from cycleState: %w", preFilterStateKey, err)
+		return 0, 0, 0, fmt.Errorf("error to convert string to int for string %s in node %s", labelInstances, nodeName)
 	}
 
-	preFilterState, ok := stateData.(*PreFilterState)
-	if !ok {
-		return nil, fmt.Errorf("%+v  convert to NodeResourcesFit.preFilterState error", stateData)
+	return int(memoryGpu), int(fp32Gpu), int(numInstances), nil
+}
+
+// Construccion de la estructura de datos en cache de los nodos
+func gpuNodeBuild(nodeName string, memoryGpu int, fp32Gpu int, numInstances int, gpuCount int) error {
+
+	var gpus []*gpuSpec = make([]*gpuSpec, gpuCount)
+
+	for i := 0; gpuCount > i; i++ {
+		gpus[i] = newGpuSpec()
+		gpus[i].setGpuSpecGpuOnly(int(memoryGpu), int(fp32Gpu), int(numInstances))
 	}
-	return preFilterState, nil
+
+	if numInstances > 0 {
+		for i := 0; int(gpuCount) > i; i++ {
+			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
+			migGeometry[0] = newMigSlice()
+			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu), maxAvailabilityGpu)
+			gpus[i].setGpuSpecMigOnly(migGeometry)
+		}
+	}
+
+	nodeGpus.setNodeGpus(gpus, nodeName)
+	return nil
 }
 
 // Verifica si el nodo tiene recursos suficientes para el pod
-func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem int, podRequests *framework.Resource) *framework.Status {
+func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem int, podRequests *framework.Resource, hardwareIsolation bool) *framework.Status {
 
 	if availableNodeCpu < int(podRequests.MilliCPU) {
 		return framework.NewStatus(framework.Unschedulable, "CPU Insuficiente")
@@ -226,6 +195,9 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 	if availableNodeMem < int(podRequests.Memory) {
 		return framework.NewStatus(framework.Unschedulable, "Memoria insuficiente")
 	}
+
+	var gpuMemReq int = int(podRequests.ScalarResources[podRequestGpuMemory])
+	var gpuFp32Req int = int(podRequests.ScalarResources[podRequestGpufp32])
 
 	totalGpus, err := nodeGpus.getLength(nodeName)
 
@@ -235,31 +207,33 @@ func enoughNodeResources(nodeName string, availableNodeCpu int, availableNodeMem
 
 	for i := 0; totalGpus > i; i++ {
 		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, i)
+
 		if err != nil {
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 
 		if gpu.migLength == 0 {
-			var gpuAvailable float64 = float64(gpu.available) / float64(maxAvailabilityGpu)
-			var gpuMemAvailable int = int(gpuAvailable * float64(gpu.mem))
-			var gpuFp32Available int = int(gpuAvailable * float64(gpu.fp32))
 
-			if gpuMemAvailable > int(podRequests.ScalarResources[podRequestGpuMemory]) && gpuFp32Available > int(podRequests.ScalarResources[podRequestGpufp32]) {
+			if hardwareIsolation && gpu.available < maxAvailabilityGpu {
+				continue
+			}
+
+			gpuFp32Available, gpuMemAvailable := gpuResourcesAvailable(float64(gpu.available), float64(gpu.fp32), float64(gpu.mem))
+
+			if gpuMemAvailable > gpuMemReq && gpuFp32Available > gpuFp32Req {
 				return framework.NewStatus(framework.Success)
 			}
+
 		} else {
-			for j := 0; gpu.migLength > j; j++ {
-				migPartition := gpu.migSlices[j]
+			var partitionsInUse []int = gpu.partitionsOccuped()
+			var geometryToEvaluate int = gpu.biggestPossiblePartitionsGeometry(partitionsInUse)
 
-				var migAvailable float64 = float64(migPartition.available) / float64(maxAvailabilityGpu)
-				var migMemAvailable int = int(migAvailable * float64(migPartition.mem))
-				var migFp32Available int = int(migAvailable * float64(migPartition.fp32))
+			if geometryToEvaluate < 0 {
+				framework.NewStatus(framework.Unschedulable, "No se ha encontrado ninguna geometría disponible")
+			}
 
-				if migMemAvailable > int(podRequests.ScalarResources[podRequestGpuMemory]) && migFp32Available > int(podRequests.ScalarResources[podRequestGpufp32]) {
-					return framework.NewStatus(framework.Success)
-				}
-
-				j += migPartition.size - 1
+			if gpu.evaluateGeometryRequestFit(geometryToEvaluate, gpuMemReq, gpuFp32Req, hardwareIsolation) {
+				return framework.NewStatus(framework.Success)
 			}
 		}
 	}
@@ -289,6 +263,7 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 
 			for j := 0; gpu.migLength > j; j++ {
 				var migPartition *migSlice = gpu.migSlices[j]
+				// Las geometrias que no aprovechan todo el espacio tendran ventaja para de esta forma tener la oportunidad de cambiar de geometria
 				totalGpuAvailable += migResourcesToGpuResources(migPartition.available, float64(migPartition.fp32), float64(migPartition.mem), gpu.fp32, gpu.mem)
 
 				j += gpu.migSlices[j].size - 1
@@ -301,7 +276,7 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 	return int64(res), framework.NewStatus(framework.Success)
 }
 
-func gpuReservation(podName string, nodeName string, podRequests *framework.Resource) error {
+func gpuReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) error {
 
 	length, err := nodeGpus.getLength(nodeName)
 
@@ -320,6 +295,10 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 
 		if err != nil {
 			return err
+		}
+
+		if hardwareIsolation && gpu.available < maxAvailabilityGpu {
+			continue
 		}
 
 		var gpuReq int = gpuResourcesRequest(fp32Req, float64(gpu.fp32), memReq, float64(gpu.mem))
@@ -344,7 +323,7 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 	return nil
 }
 
-func migReservation(podName string, nodeName string, podRequests *framework.Resource) error {
+func migReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) error {
 
 	var defMigUseReq int
 	var defGeometryRow int
@@ -375,7 +354,7 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 		for i := 0; len(geometriesAvailable) > i; i++ {
 			// klog.V(0).Infof("- %d", geometriesAvailable[i])
 		}
-		geometryRow, migPosition, migLeft, gpuReq, migReq := gpu.bestGeometryForMig7(geometriesAvailable, podRequests)
+		geometryRow, migPosition, migLeft, gpuReq, migReq := gpu.bestGeometryForMig7(geometriesAvailable, podRequests, hardwareIsolation)
 
 		if leastGpuReq > gpuReq || (leastGpuReq == gpuReq && leastMigLeft > migLeft) {
 			defGpuPosition = gpuPosition
@@ -409,6 +388,14 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
 	scanNode(nodeName)
 	return nil
+}
+
+func gpuResourcesAvailable(availability float64, gpuFp32 float64, gpuMem float64) (fp32Left int, memLeft int) {
+	var gpuAvailable float64 = availability / float64(maxAvailabilityGpu)
+	var gpuMemAvailable int = int(gpuAvailable * gpuMem)
+	var gpuFp32Available int = int(gpuAvailable * gpuFp32)
+
+	return gpuFp32Available, gpuMemAvailable
 }
 
 func gpuResourcesRequest(fp32Req float64, gpuFp32 float64, memReq float64, gpuMem float64) int {

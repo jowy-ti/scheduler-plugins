@@ -28,15 +28,15 @@ const (
 	preFilterStateKey framework.StateKey = "PodResources"
 	Name              string             = "MyScheduler"
 	timeAssigned      string             = "deadline"
-	hardIsolation     string             = "hard-isolation"
+	hardIsolation     string             = "hardIsolation"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
-
 var podsUsage *podsGpuUsage = newPodsGpuUsage()
 
 type PreFilterState struct {
-	resources framework.Resource
+	resources         framework.Resource
+	hardwareIsolation bool
 }
 
 func (s *PreFilterState) Clone() framework.StateData {
@@ -87,9 +87,21 @@ func (m *MyScheduler) PreFilter(ctx context.Context, state *framework.CycleState
 	// state.SetRecordPluginMetrics(true)
 
 	var podRequests *framework.Resource = computePodResourceRequest(pod)
+	var podAnnotations map[string]string = pod.Annotations
+
+	hardwareIsolationAnnotation, ok := podAnnotations[hardIsolation]
+	if !ok {
+		return nil, framework.NewStatus(framework.Unschedulable, fmt.Sprintf("No existe la anotación %s", hardIsolation))
+	}
+
+	hardwareIsolation, err := strconv.ParseBool(hardwareIsolationAnnotation)
+	if err != nil {
+		return nil, framework.NewStatus(framework.Unschedulable, err.Error())
+	}
 
 	var preFilterState *PreFilterState = &PreFilterState{
-		resources: *podRequests,
+		resources:         *podRequests,
+		hardwareIsolation: hardwareIsolation,
 	}
 
 	state.Write(preFilterStateKey, preFilterState)
@@ -110,21 +122,30 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 	}
 
 	var nodeName string = nodeInfo.GetName()
+	var gpuCount int = int(nodeInfo.Allocatable.ScalarResources[gpuResourceName])
+	var nodeLabels map[string]string = nodeInfo.Node().Labels
 	_, ok := nodeGpus.nodes[nodeName]
 
 	if !ok {
-		// klog.V(0).Infof("Not found node %s", nodeName)
-		err := gpuNodeBuild(nodeInfo)
+		memoryGpu, fp32Gpu, numInstances, err := extractNodeInfo(nodeLabels, nodeName)
+
+		if err != nil {
+			return framework.NewStatus(framework.Unschedulable, err.Error())
+		}
+
+		err = gpuNodeBuild(nodeName, memoryGpu, fp32Gpu, numInstances, gpuCount)
 
 		if err != nil {
 			return framework.NewStatus(framework.Unschedulable, err.Error())
 		}
 	}
+
+	var hardwareIsolation bool = preFilterState.hardwareIsolation
 	var podRequests *framework.Resource = &preFilterState.resources
 	var availableNodeCpu int = int(nodeInfo.Allocatable.MilliCPU - nodeInfo.Requested.MilliCPU)
 	var availableNodeMem int = int(nodeInfo.Allocatable.Memory - nodeInfo.Requested.Memory)
 
-	return enoughNodeResources(nodeName, availableNodeCpu, availableNodeMem, podRequests)
+	return enoughNodeResources(nodeName, availableNodeCpu, availableNodeMem, podRequests, hardwareIsolation)
 }
 
 func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
@@ -164,6 +185,7 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 		return framework.NewStatus(framework.Unschedulable, "Fallo al leer 'preFilterState' en 'cycleState'")
 	}
 
+	var hardwareIsolation bool = preFilterState.hardwareIsolation
 	var podRequests *framework.Resource = &preFilterState.resources
 	mig, err := nodeGpus.isMig(node)
 
@@ -172,9 +194,9 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	}
 
 	if !mig {
-		err = gpuReservation(pod.Name, node, podRequests)
+		err = gpuReservation(pod.Name, node, podRequests, hardwareIsolation)
 	} else {
-		err = migReservation(pod.Name, node, podRequests)
+		err = migReservation(pod.Name, node, podRequests, hardwareIsolation)
 	}
 
 	if err != nil {
@@ -193,12 +215,6 @@ func (m *MyScheduler) Unreserve(ctx context.Context, state *framework.CycleState
 
 func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
-	// preFilterState, err := getPreFilterState(state)
-
-	// if err != nil {
-	// 	return framework.NewStatus(framework.Unschedulable, "Failed to read preFilterState from cycleState")
-	// }
-
 	var timeInt int = int(30 + time.Now().Unix())
 	timeStr := strconv.Itoa(timeInt)
 
@@ -210,4 +226,35 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 		return framework.NewStatus(framework.Error, fmt.Sprintf("Fallo al añadir la anotación en PreBind: %v", err))
 	}
 	return framework.NewStatus(framework.Success)
+}
+
+// onDelete
+
+func onDelete(obj interface{}) {
+	pod, ok := obj.(*v1.Pod)
+
+	if !ok {
+		unknown, ok := obj.(cache.DeletedFinalStateUnknown)
+		if !ok {
+			return
+		}
+		pod, ok = unknown.Obj.(*v1.Pod)
+		if !ok {
+			return
+		}
+	}
+	var podName string = pod.Name
+	podsUsage.cleanPodResources(podName)
+}
+
+// FilterFunc
+
+func filterFunc(obj interface{}) bool {
+	pod, ok := obj.(*v1.Pod)
+
+	if !ok {
+		return false
+	}
+	var podLabels map[string]string = pod.Labels
+	return podLabels[filterPodLabel] == filterPodLabelValue
 }
