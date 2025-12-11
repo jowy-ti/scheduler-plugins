@@ -178,7 +178,6 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
-	node := "kwok-node-1"
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
@@ -187,24 +186,24 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 
 	var hardwareIsolation bool = preFilterState.hardwareIsolation
 	var podRequests *framework.Resource = &preFilterState.resources
-	mig, err := nodeGpus.isMig(node)
+	mig, err := nodeGpus.isMig(nodeName)
 
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
 	if !mig {
-		err = gpuReservation(pod.Name, node, podRequests, hardwareIsolation)
+		err = gpuReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	} else {
-		err = migReservation(pod.Name, node, podRequests, hardwareIsolation)
+		err = migReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	}
 
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
-	// scanPodUsage(pod.Name)
-	// scanNode(node)
+	scanPodUsage(pod.Name)
+	scanNode(nodeName)
 
 	return framework.NewStatus(framework.Success)
 }

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	migInstances        string          = "mig-instances"
+	migSlices           string          = "mig-instances"
 	gpuResourceName     v1.ResourceName = "nvidia.com/gpu"
 	maxAvailabilityGpu  int             = 1000
 	gpuMemory           string          = "nvidia.com/gpu.memory"
@@ -70,17 +70,16 @@ var MIG_PROFILES_7_RESOURCES_UNUSED = func() [MIG_7_ROWS]int {
 
 	for i := 0; MIG_7_ROWS > i; i++ {
 		var resourcesUsed float64 = 0
+		var migSize int
 
-		for j := 0; MIG_7_COLUMNS > j; j++ {
-			var migSize int = MIG_PROFILES_7_INSTANCES[i][j]
+		for j := 0; MIG_7_COLUMNS > j; j += absInt(migSize) {
+			migSize = MIG_PROFILES_7_INSTANCES[i][j]
 
 			if migSize == invalidInstanceSize {
 				continue
 			}
 
 			resourcesUsed += MIG_7_MEMORY_FRACTION[migSize] + MIG_7_COMPUTE_FRACTION[migSize]
-
-			j += migSize - 1
 		}
 		var unused float64 = float64(maxAvailabilityGpu) - ((resourcesUsed / 2.0) * float64(maxAvailabilityGpu))
 		resourcesUnused[i] = int(unused)
@@ -89,6 +88,13 @@ var MIG_PROFILES_7_RESOURCES_UNUSED = func() [MIG_7_ROWS]int {
 }()
 
 // Funciones auxiliares
+
+func absInt(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
 
 // Obtencion del StateData dentro del CycleState
 func getPreFilterState(cycleState *framework.CycleState) (*PreFilterState, error) {
@@ -150,9 +156,9 @@ func extractNodeInfo(nodeLabels map[string]string, nodeName string) (gpuMem int,
 		return 0, 0, 0, fmt.Errorf("error to convert string to int for string %s in node %s", labelfp32Gpu, nodeName)
 	}
 
-	labelInstances, ok := nodeLabels[migInstances]
+	labelInstances, ok := nodeLabels[migSlices]
 	if !ok {
-		return 0, 0, 0, fmt.Errorf("label %s not found in node %s", migInstances, nodeName)
+		return 0, 0, 0, fmt.Errorf("label %s not found in node %s", migSlices, nodeName)
 	}
 	numInstances, err := strconv.ParseInt(labelInstances, 10, 0)
 
@@ -175,9 +181,9 @@ func gpuNodeBuild(nodeName string, memoryGpu int, fp32Gpu int, numInstances int,
 
 	if numInstances > 0 {
 		for i := 0; int(gpuCount) > i; i++ {
-			var migGeometry []*migSlice = make([]*migSlice, int(numInstances))
-			migGeometry[0] = newMigSlice()
-			migGeometry[0].setInfoMigSlice(int(numInstances), int(memoryGpu), int(fp32Gpu), maxAvailabilityGpu)
+			var migGeometry []*migInstance = make([]*migInstance, int(numInstances))
+			migGeometry[0] = newMigInstance()
+			migGeometry[0].setInfoMigInstance(int(numInstances), int(memoryGpu), int(fp32Gpu), maxAvailabilityGpu)
 			gpus[i].setGpuSpecMigOnly(migGeometry)
 		}
 	}
@@ -260,13 +266,15 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 		if gpu.migLength == 0 {
 			totalGpuAvailable += gpu.available
 		} else {
+			var migPartition *migInstance
 
-			for j := 0; gpu.migLength > j; j++ {
-				var migPartition *migSlice = gpu.migSlices[j]
-				// Las geometrias que no aprovechan todo el espacio tendran ventaja para de esta forma tener la oportunidad de cambiar de geometria
-				totalGpuAvailable += migResourcesToGpuResources(migPartition.available, float64(migPartition.fp32), float64(migPartition.mem), gpu.fp32, gpu.mem)
+			for j := 0; gpu.migLength > j; j += absInt(migPartition.size) {
+				migPartition = gpu.migInstances[j]
 
-				j += gpu.migSlices[j].size - 1
+				var gpuFp32 int = ((gpu.fp32 * maxAvailabilityGpu) - (gpu.fp32 * MIG_PROFILES_7_RESOURCES_UNUSED[j])) / maxAvailabilityGpu
+				var gpuMem int = ((gpu.mem * maxAvailabilityGpu) - (gpu.mem * MIG_PROFILES_7_RESOURCES_UNUSED[j])) / maxAvailabilityGpu
+
+				totalGpuAvailable += migResourcesToGpuResources(float64(migPartition.available), float64(migPartition.fp32), float64(migPartition.mem), float64(gpuFp32), float64(gpuMem))
 			}
 		}
 	}
@@ -386,7 +394,6 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	gpu.reconfiguration(defGeometryRow)
 	nodeGpus.setSingleNodeGpu(gpu, nodeName, defGpuPosition)
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
-	scanNode(nodeName)
 	return nil
 }
 
@@ -407,12 +414,12 @@ func gpuResourcesRequest(fp32Req float64, gpuFp32 float64, memReq float64, gpuMe
 	return int(gpuReq)
 }
 
-func migResourcesToGpuResources(migUse int, migFp32 float64, migMem float64, gpuFp32 int, gpuMem int) int {
-	var migReqRatio float64 = float64(migUse) / float64(maxAvailabilityGpu)
+func migResourcesToGpuResources(migUse float64, migFp32 float64, migMem float64, gpuFp32 float64, gpuMem float64) int {
+	var migReqRatio float64 = migUse / float64(maxAvailabilityGpu)
 	var fp32Req float64 = migReqRatio * migFp32
 	var memReq float64 = migReqRatio * migMem
-	var gpuFp32Ratio float64 = fp32Req / float64(gpuFp32)
-	var gpuMemRatio float64 = memReq / float64(gpuMem)
+	var gpuFp32Ratio float64 = fp32Req / gpuFp32
+	var gpuMemRatio float64 = memReq / gpuMem
 	var gpuReq float64 = ((gpuFp32Ratio + gpuMemRatio) / 2.0) * float64(maxAvailabilityGpu)
 
 	// No se utiliza el Ceil para prevenir redondeos: 7.00000000001 -> 8 los cuales suele pasar cuando la relación es exacta y float64 no es 100% preciso

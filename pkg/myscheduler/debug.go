@@ -26,15 +26,14 @@ func scanNode(nodeName string) {
 			klog.V(0).Infof("Fp32: %d", gpu.fp32)
 			klog.V(0).Infof("MigLength: %d", gpu.migLength)
 		} else {
-			for j := 0; gpu.migLength > j; j++ {
-				migPartition := gpu.migSlices[j]
+			var migPartition *migInstance
+			for j := 0; gpu.migLength > j; j += absInt(migPartition.size) {
+				migPartition = gpu.migInstances[j]
 
 				klog.V(0).Infof("Available: %d", migPartition.available)
 				klog.V(0).Infof("Memory: %d", migPartition.mem)
 				klog.V(0).Infof("Fp32: %d", migPartition.fp32)
 				klog.V(0).Infof("Size: %d", migPartition.size)
-
-				j += migPartition.size - 1
 			}
 		}
 	}

@@ -10,11 +10,11 @@ import (
 // Informacion de GPU
 type gpuSpec struct {
 	sync.RWMutex
-	available int // sobre maxAvailabilityGpu
-	mem       int
-	fp32      int // GFLOPS
-	migLength int
-	migSlices []*migSlice
+	available    int // sobre maxAvailabilityGpu
+	mem          int
+	fp32         int // GFLOPS
+	migLength    int
+	migInstances []*migInstance
 }
 
 // Metodos gpuSpec
@@ -23,19 +23,19 @@ func newGpuSpec() *gpuSpec {
 }
 
 // Metodos privados para 'allNodesGpus'
-func (g *gpuSpec) getMigSlice(migPosition int) (*migSlice, error) {
+func (g *gpuSpec) getMigInstance(migPosition int) (*migInstance, error) {
 
-	var migSlices []*migSlice = g.migSlices
+	var migInstances []*migInstance = g.migInstances
 
-	if migPosition >= len(migSlices) || migPosition < 0 {
-		return nil, fmt.Errorf("gpuSpec.getMigSlice: posición de MIG fuera de rango %d", migPosition)
+	if migPosition >= len(migInstances) || migPosition < 0 {
+		return nil, fmt.Errorf("gpuSpec.getMigInstance: posición de MIG fuera de rango %d", migPosition)
 	}
 
-	if migSlices[migPosition] == nil {
-		return nil, fmt.Errorf("gpuSpec.getMigSlice: no es la posición de ninguna partición MIG %d", migPosition)
+	if migInstances[migPosition] == nil {
+		return nil, fmt.Errorf("gpuSpec.getMigInstance: no es la posición de ninguna partición MIG %d", migPosition)
 	}
 
-	return migSlices[migPosition], nil
+	return migInstances[migPosition], nil
 }
 
 func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
@@ -43,36 +43,35 @@ func (g *gpuSpec) deepCopy() (*gpuSpec, error) {
 	g.RLock()
 	defer g.RUnlock()
 
-	var migPartitions []*migSlice
+	var migInstances []*migInstance
 
 	if g.migLength > 0 {
-		migPartitions = make([]*migSlice, g.migLength)
+		migInstances = make([]*migInstance, g.migLength)
 
-		for i := 0; g.migLength > i; i++ {
-			migPartition, err := g.getMigSlice(i)
+		for i := 0; g.migLength > i; i += absInt(migInstances[i].size) {
+			migInst, err := g.getMigInstance(i)
 
 			if err != nil {
 				return nil, err
 			}
 
-			migPartition.RLock()
-			migPartitions[i] = &migSlice{
-				available: migPartition.available,
-				mem:       migPartition.mem,
-				size:      migPartition.size,
-				fp32:      migPartition.fp32,
+			migInst.RLock()
+			migInstances[i] = &migInstance{
+				available: migInst.available,
+				mem:       migInst.mem,
+				size:      migInst.size,
+				fp32:      migInst.fp32,
 			}
-			migPartition.RUnlock()
-			i += migPartitions[i].size - 1
+			migInst.RUnlock()
 		}
 	}
 
 	var gpu *gpuSpec = &gpuSpec{
-		available: g.available,
-		mem:       g.mem,
-		fp32:      g.fp32,
-		migLength: g.migLength,
-		migSlices: migPartitions,
+		available:    g.available,
+		mem:          g.mem,
+		fp32:         g.fp32,
+		migLength:    g.migLength,
+		migInstances: migInstances,
 	}
 
 	return gpu, nil
@@ -94,11 +93,11 @@ func (g *gpuSpec) setGpuSpecGpuOnly(mem int, fp32 int, migLength int) error {
 }
 
 // Añade la informacion especifica de MIG
-func (g *gpuSpec) setGpuSpecMigOnly(migPartition []*migSlice) error {
-	if migPartition == nil {
-		return fmt.Errorf("gpuSpec.setGpuSpecMigOnly: no se puede crear un *gpuSpec con mig y migPartition nil")
+func (g *gpuSpec) setGpuSpecMigOnly(migInstance []*migInstance) error {
+	if migInstance == nil {
+		return fmt.Errorf("gpuSpec.setGpuSpecMigOnly: no se puede crear un *gpuSpec con mig y migInstance nil")
 	}
-	g.migSlices = migPartition
+	g.migInstances = migInstance
 	return nil
 }
 
@@ -107,14 +106,13 @@ func (g *gpuSpec) partitionsOccuped() []int {
 
 	var usedPartitions []int = make([]int, 0)
 
-	for migPosition := 0; g.migLength > migPosition; migPosition++ {
-		var migPartition *migSlice = g.migSlices[migPosition]
+	var migInstance *migInstance
+	for migPosition := 0; g.migLength > migPosition; migPosition += absInt(migInstance.size) {
+		migInstance = g.migInstances[migPosition]
 
-		if migPartition.available < maxAvailabilityGpu {
+		if migInstance.available < maxAvailabilityGpu {
 			usedPartitions = append(usedPartitions, migPosition)
 		}
-
-		migPosition += migPartition.size - 1
 	}
 
 	return usedPartitions
@@ -135,7 +133,7 @@ func (g *gpuSpec) biggestPossiblePartitionsGeometry(partitionsInUse []int) int {
 
 		for j := 0; lenghtPartitionsInUse > j; j++ {
 			var migPos int = partitionsInUse[j]
-			var migSize int = g.migSlices[migPos].size
+			var migSize int = g.migInstances[migPos].size
 
 			if MIG_PROFILES_7_INSTANCES[i][migPos] != migSize {
 				okGeometry = false
@@ -153,20 +151,21 @@ func (g *gpuSpec) biggestPossiblePartitionsGeometry(partitionsInUse []int) int {
 // Evalua si la geometria tiene alguna partición que cumpla con los requisistos de memoria y fp32 del pod
 func (g *gpuSpec) evaluateGeometryRequestFit(geometryToEvaluate int, memReq int, fp32Req int, hardwareIsolation bool) bool {
 
-	for i := 0; MIG_7_COLUMNS > i; i++ {
+	var migSizeGeometry int
+
+	for i := 0; MIG_7_COLUMNS > i; i += absInt(migSizeGeometry) {
 		var migFp32 float64
 		var migMem float64
 		var migAvailable float64
-		var migSizeGeometry int = MIG_PROFILES_7_INSTANCES[geometryToEvaluate][i]
+		migSizeGeometry = MIG_PROFILES_7_INSTANCES[geometryToEvaluate][i]
 
-		if g.migSlices[i] != nil && g.migSlices[i].size == migSizeGeometry {
-			var migPartition *migSlice = g.migSlices[i]
-			migAvailable = float64(migPartition.available)
-			migFp32 = float64(migPartition.fp32)
-			migMem = float64(migPartition.mem)
+		if g.migInstances[i] != nil && g.migInstances[i].size == migSizeGeometry {
+			var migInstance *migInstance = g.migInstances[i]
+			migAvailable = float64(migInstance.available)
+			migFp32 = float64(migInstance.fp32)
+			migMem = float64(migInstance.mem)
 
 			if hardwareIsolation && migAvailable < float64(maxAvailabilityGpu) {
-				i += migSizeGeometry - 1
 				continue
 			}
 
@@ -184,8 +183,6 @@ func (g *gpuSpec) evaluateGeometryRequestFit(geometryToEvaluate int, memReq int,
 		if gpuMemLeft >= memReq && gpuFp32Left >= fp32Req {
 			return true
 		}
-
-		i += migSizeGeometry - 1
 	}
 	return false
 }
@@ -208,7 +205,7 @@ func (g *gpuSpec) possibleGeometries(partitionsInUse []int) []int {
 			for j := 0; lenghtPartitionsInUse > j; j++ {
 				var migPos int = partitionsInUse[j]
 				var migSizeGeometry int = MIG_PROFILES_7_INSTANCES[i][migPos]
-				var migSizeGpu int = g.migSlices[migPos].size
+				var migSizeGpu int = g.migInstances[migPos].size
 
 				if migSizeGeometry != migSizeGpu {
 					okGeometry = false
@@ -241,25 +238,25 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 	for i := 0; geometriesLength > i; i++ {
 		var geometryPos int = geometries[i]
 		// klog.V(0).Infof("Geometry: %d", geometryPos)
+		var migSizeGeometry int
 
-		for j := 0; MIG_7_COLUMNS > j; j++ {
+		for j := 0; MIG_7_COLUMNS > j; j += absInt(migSizeGeometry) {
 			var migFp32 float64
 			var migMem float64
 			var migAvailable int
-			var migSizeGeometry int = MIG_PROFILES_7_INSTANCES[geometryPos][j]
+			migSizeGeometry = MIG_PROFILES_7_INSTANCES[geometryPos][j]
 
 			if migSizeGeometry == invalidInstanceSize {
 				continue
 			}
 
-			if g.migSlices[j] != nil && g.migSlices[j].size == migSizeGeometry {
-				var migPartition *migSlice = g.migSlices[j]
-				migAvailable = migPartition.available
-				migFp32 = float64(migPartition.fp32)
-				migMem = float64(migPartition.mem)
+			if g.migInstances[j] != nil && g.migInstances[j].size == migSizeGeometry {
+				var migInstance *migInstance = g.migInstances[j]
+				migAvailable = migInstance.available
+				migFp32 = float64(migInstance.fp32)
+				migMem = float64(migInstance.mem)
 
 				if hardwareIsolation && migAvailable < maxAvailabilityGpu {
-					i += migSizeGeometry - 1
 					continue
 				}
 
@@ -268,17 +265,16 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 				migFp32 = MIG_7_COMPUTE_FRACTION[migSizeGeometry] * float64(g.fp32)
 				migMem = MIG_7_MEMORY_FRACTION[migSizeGeometry] * float64(g.mem)
 			}
-			// klog.V(0).Infof("- migPartition: %d", j)
+			// klog.V(0).Infof("- migInstance: %d", j)
 			var migReq int = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
 			var migLeft int = migAvailable - migReq
 
 			if migLeft < 0 {
-				j += migSizeGeometry - 1
 				continue
 			}
 			// klog.V(0).Infof("  - migReq: %d", migReq)
 			// Se calcula el uso de GPU en base al de la partición mig y se suma la porción que no es posible utilizar debido a la geometría
-			var gpuReq int = migResourcesToGpuResources(migReq, migFp32, migMem, g.fp32, g.mem) + MIG_PROFILES_7_RESOURCES_UNUSED[geometryPos]
+			var gpuReq int = migResourcesToGpuResources(float64(migReq), migFp32, migMem, float64(g.fp32), float64(g.mem)) + MIG_PROFILES_7_RESOURCES_UNUSED[geometryPos]
 			// klog.V(0).Infof("  - gpuReq: %d", gpuReq)
 			// klog.V(0).Infof("  - migLeft: %d", migLeft)
 
@@ -289,8 +285,6 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 				defMigPosition = j
 				defMigReq = migReq
 			}
-
-			j += migSizeGeometry - 1
 		}
 	}
 	return defGeometry, defMigPosition, leastMigLeft, leastGpuReq, defMigReq
@@ -299,20 +293,21 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 func (g *gpuSpec) reconfiguration(geometryRow int) {
 
 	var geometry [MIG_7_COLUMNS]int = MIG_PROFILES_7_INSTANCES[geometryRow]
-	var migGeometry []*migSlice = make([]*migSlice, MIG_7_COLUMNS)
+	var migGeometry []*migInstance = make([]*migInstance, MIG_7_COLUMNS)
+	var migSizeGeometry int
 
-	for i := 0; MIG_7_COLUMNS > i; i++ {
+	for i := 0; MIG_7_COLUMNS > i; i += absInt(migSizeGeometry) {
 		var migMemory float64
 		var migFp32 float64
 		var availability int
-		var migSizeGeometry int = geometry[i]
+		migSizeGeometry = geometry[i]
 
 		if migSizeGeometry == invalidInstanceSize {
 			continue
 		}
 
-		if g.migSlices[i] != nil && migSizeGeometry == g.migSlices[i].size {
-			availability = g.migSlices[i].available
+		if g.migInstances[i] != nil && migSizeGeometry == g.migInstances[i].size {
+			availability = g.migInstances[i].available
 		} else {
 			availability = maxAvailabilityGpu
 		}
@@ -320,9 +315,8 @@ func (g *gpuSpec) reconfiguration(geometryRow int) {
 		migMemory = float64(g.mem) * MIG_7_MEMORY_FRACTION[migSizeGeometry]
 		migFp32 = float64(g.fp32) * MIG_7_COMPUTE_FRACTION[migSizeGeometry]
 
-		migGeometry[i] = newMigSlice()
-		migGeometry[i].setInfoMigSlice(migSizeGeometry, int(migMemory), int(migFp32), availability)
-		i += migSizeGeometry - 1
+		migGeometry[i] = newMigInstance()
+		migGeometry[i].setInfoMigInstance(migSizeGeometry, int(migMemory), int(migFp32), availability)
 	}
 	g.setGpuSpecMigOnly(migGeometry)
 }

@@ -114,20 +114,20 @@ func (p *allNodesGpus) cleanResourcesMigOnly(nodeName string, gpuPosition int, m
 	gpu.RLock()
 	defer gpu.RUnlock()
 
-	migSlice, err := gpu.getMigSlice(migPosition)
+	migInstance, err := gpu.getMigInstance(migPosition)
 
 	if err != nil {
 		return err
 	}
 
-	migSlice.Lock()
-	defer migSlice.Unlock()
+	migInstance.Lock()
+	defer migInstance.Unlock()
 
-	if migSlice.available+migUsage > maxAvailabilityGpu {
-		return fmt.Errorf("allNodesGpus.cleanResourcesMigOnly: incoherencia entre MIG libre y la que se tiene que liberar. Partición MIG libre: %d. partición MIG a liberar %d", migSlice.available, migUsage)
+	if migInstance.available+migUsage > maxAvailabilityGpu {
+		return fmt.Errorf("allNodesGpus.cleanResourcesMigOnly: incoherencia entre MIG libre y la que se tiene que liberar. Partición MIG libre: %d. partición MIG a liberar %d", migInstance.available, migUsage)
 	}
 
-	migSlice.available += migUsage
+	migInstance.available += migUsage
 	return nil
 }
 
@@ -161,20 +161,20 @@ func (p *allNodesGpus) reserveResourcesMigOnly(nodeName string, gpuPosition int,
 	gpu.RLock()
 	defer gpu.RUnlock()
 
-	migSlice, err := gpu.getMigSlice(migPosition)
+	migInstance, err := gpu.getMigInstance(migPosition)
 
 	if err != nil {
 		return err
 	}
 
-	migSlice.Lock()
-	defer migSlice.Unlock()
+	migInstance.Lock()
+	defer migInstance.Unlock()
 
-	if migSlice.available < migUsage {
-		return fmt.Errorf("allNodesGpus.reserveResourcesMigOnly: no hay suficientes recursos en la partición MIG. Partición MIG libre: %d. partición MIG demandada %d", migSlice.available, migUsage)
+	if migInstance.available < migUsage {
+		return fmt.Errorf("allNodesGpus.reserveResourcesMigOnly: no hay suficientes recursos en la partición MIG. Partición MIG libre: %d. partición MIG demandada %d", migInstance.available, migUsage)
 	}
 
-	migSlice.available -= migUsage
+	migInstance.available -= migUsage
 	return nil
 }
 

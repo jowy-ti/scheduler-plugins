@@ -5,7 +5,7 @@ import (
 )
 
 // Informacion de la particion de MIG
-type migSlice struct {
+type migInstance struct {
 	sync.RWMutex
 	available int // sobre maxAvailabilityGpu
 	size      int
@@ -15,18 +15,18 @@ type migSlice struct {
 
 // InstanciaMigNoDisponible {
 // 	available: 	max
-// 	size:		size
+// 	size:		-size
 // 	mem      	0
 // 	fp32     	0
 // }
 
-// Metodos migSlice
-func newMigSlice() *migSlice {
-	return &migSlice{}
+// Metodos migInstance
+func newMigInstance() *migInstance {
+	return &migInstance{}
 }
 
 // Setters. Prohibido usarlos en nodeGpus, uso unicamente en estructuras locales
-func (m *migSlice) setInfoMigSlice(size int, mem int, fp32 int, availability int) {
+func (m *migInstance) setInfoMigInstance(size int, mem int, fp32 int, availability int) {
 	m.available = availability
 	m.size = size
 	m.mem = mem
