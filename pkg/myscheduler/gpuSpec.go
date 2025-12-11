@@ -270,21 +270,24 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 			}
 			// klog.V(0).Infof("- migPartition: %d", j)
 			var migReq int = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
+			var migLeft int = migAvailable - migReq
+
+			if migLeft < 0 {
+				j += migSizeGeometry - 1
+				continue
+			}
 			// klog.V(0).Infof("  - migReq: %d", migReq)
 			// Se calcula el uso de GPU en base al de la partición mig y se suma la porción que no es posible utilizar debido a la geometría
 			var gpuReq int = migResourcesToGpuResources(migReq, migFp32, migMem, g.fp32, g.mem) + MIG_PROFILES_7_RESOURCES_UNUSED[geometryPos]
 			// klog.V(0).Infof("  - gpuReq: %d", gpuReq)
-			var migLeft int = migAvailable - migReq
 			// klog.V(0).Infof("  - migLeft: %d", migLeft)
 
-			if migLeft >= 0 {
-				if leastGpuReq > gpuReq || (leastGpuReq == gpuReq && leastMigLeft > migLeft) {
-					leastGpuReq = gpuReq
-					leastMigLeft = migLeft
-					defGeometry = geometryPos
-					defMigPosition = j
-					defMigReq = migReq
-				}
+			if leastGpuReq > gpuReq || (leastGpuReq == gpuReq && leastMigLeft > migLeft) {
+				leastGpuReq = gpuReq
+				leastMigLeft = migLeft
+				defGeometry = geometryPos
+				defMigPosition = j
+				defMigReq = migReq
 			}
 
 			j += migSizeGeometry - 1
