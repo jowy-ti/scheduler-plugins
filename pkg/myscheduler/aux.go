@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	v1 "k8s.io/api/core/v1"
-	klog "k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -305,11 +304,11 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 			return err
 		}
 
-		if hardwareIsolation && gpu.available < maxAvailabilityGpu {
-			continue
-		}
-
 		var gpuReq int = gpuResourcesRequest(fp32Req, float64(gpu.fp32), memReq, float64(gpu.mem))
+
+		if hardwareIsolation && gpuReq < maxAvailabilityGpu {
+			gpuReq = maxAvailabilityGpu
+		}
 
 		if gpu.available < leastAvailableValue && gpu.available >= gpuReq {
 			leastAvailableValue = gpu.available
@@ -383,13 +382,13 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	if err != nil {
 		return err
 	}
-	klog.V(0).Info("Final results:")
-	klog.V(0).Infof("- defGeometry: %d", defGeometryRow)
-	klog.V(0).Infof("- gpuPosition: %d", defGpuPosition)
-	klog.V(0).Infof("- migPartition: %d", defMigPosition)
-	klog.V(0).Infof("- migRequested: %d", defMigUseReq)
-	klog.V(0).Infof("- leastMigLeft: %d", leastMigLeft)
-	klog.V(0).Infof("- leastGpuReq: %d", leastGpuReq)
+	// klog.V(0).Info("Final results:")
+	// klog.V(0).Infof("- defGeometry: %d", defGeometryRow)
+	// klog.V(0).Infof("- gpuPosition: %d", defGpuPosition)
+	// klog.V(0).Infof("- migPartition: %d", defMigPosition)
+	// klog.V(0).Infof("- migRequested: %d", defMigUseReq)
+	// klog.V(0).Infof("- leastMigLeft: %d", leastMigLeft)
+	// klog.V(0).Infof("- leastGpuReq: %d", leastGpuReq)
 
 	gpu.reconfiguration(defGeometryRow)
 	nodeGpus.setSingleNodeGpu(gpu, nodeName, defGpuPosition)

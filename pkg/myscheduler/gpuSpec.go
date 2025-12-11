@@ -255,11 +255,6 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 				migAvailable = migInstance.available
 				migFp32 = float64(migInstance.fp32)
 				migMem = float64(migInstance.mem)
-
-				if hardwareIsolation && migAvailable < maxAvailabilityGpu {
-					continue
-				}
-
 			} else {
 				migAvailable = maxAvailabilityGpu
 				migFp32 = MIG_7_COMPUTE_FRACTION[migSizeGeometry] * float64(g.fp32)
@@ -267,6 +262,11 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 			}
 			// klog.V(0).Infof("- migInstance: %d", j)
 			var migReq int = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
+
+			if hardwareIsolation && migReq < maxAvailabilityGpu {
+				migReq = maxAvailabilityGpu
+			}
+
 			var migLeft int = migAvailable - migReq
 
 			if migLeft < 0 {
