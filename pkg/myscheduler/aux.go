@@ -22,6 +22,7 @@ const (
 	invalidInstanceSize int             = -1
 	MIG_7_ROWS          int             = 19
 	MIG_7_COLUMNS       int             = 7
+	invalidTime         string          = "NaN"
 )
 
 var MIG_PROFILES_7_INSTANCES [MIG_7_ROWS][MIG_7_COLUMNS]int = [MIG_7_ROWS][MIG_7_COLUMNS]int{
@@ -130,6 +131,48 @@ func computePodResourceRequest(pod *v1.Pod) *framework.Resource {
 	}
 
 	return result
+}
+
+func extractPodTimes(podAnnotations map[string]string, podName string) (scheduled int64, deletion int64, err error) {
+
+	scheduledTimeAnnotation, ok := podAnnotations[scheduledAnnotation]
+
+	if !ok {
+		return 0, 0, fmt.Errorf("no se ha encontrado la anotación %s en el pod %s", scheduledAnnotation, podName)
+	}
+
+	if scheduledTimeAnnotation == invalidTime {
+		scheduledTimeAnnotation = "0"
+	}
+
+	scheduledTime, err := strconv.ParseInt(scheduledTimeAnnotation, 10, 0)
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	deletionTimeAnnotation, ok := podAnnotations[deletionAnnotation]
+
+	if !ok {
+		return 0, 0, fmt.Errorf("no se ha encontrado la anotación %s en el pod %s", deletionAnnotation, podName)
+	}
+
+	if deletionTimeAnnotation == invalidTime {
+		deletionTimeAnnotation = "0"
+	}
+
+	deletionTime, err := strconv.ParseInt(deletionTimeAnnotation, 10, 0)
+
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if scheduledTime == 0 || deletionTime == 0 {
+		scheduledTime = 0
+		deletionTime = 0
+	}
+
+	return scheduledTime, deletionTime, nil
 }
 
 // Extrae información del nodo para poder construirlo
