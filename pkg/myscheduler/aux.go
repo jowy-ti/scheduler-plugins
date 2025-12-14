@@ -309,15 +309,26 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 			totalGpuAvailable += gpu.available
 		} else {
 			var migPartition *migInstance
+			var totalMigFp32 float64 = 0
+			var totalMigMem float64 = 0
 
 			for j := 0; gpu.migLength > j; j += absInt(migPartition.size) {
 				migPartition = gpu.migInstances[j]
-
-				var gpuFp32 int = ((gpu.fp32 * maxAvailabilityGpu) - (gpu.fp32 * MIG_PROFILES_7_RESOURCES_UNUSED[j])) / maxAvailabilityGpu
-				var gpuMem int = ((gpu.mem * maxAvailabilityGpu) - (gpu.mem * MIG_PROFILES_7_RESOURCES_UNUSED[j])) / maxAvailabilityGpu
-
-				totalGpuAvailable += migResourcesToGpuResources(float64(migPartition.available), float64(migPartition.fp32), float64(migPartition.mem), float64(gpuFp32), float64(gpuMem))
+				var ratioAvail float64 = float64(migPartition.available) / float64(maxAvailabilityGpu)
+				totalMigFp32 += float64(migPartition.fp32) * ratioAvail
+				totalMigMem += float64(migPartition.mem) * ratioAvail
 			}
+
+			posGeometry, err := gpu.findGeometry()
+
+			if err != nil {
+				return 0, framework.NewStatus(framework.Error, err.Error())
+			}
+
+			var ratioFp32 float64 = totalMigFp32 / float64(gpu.fp32)
+			var ratioMem float64 = totalMigMem / float64(gpu.mem)
+			var gpuAvailable float64 = ((ratioFp32 + ratioMem) / 2.0) * float64(maxAvailabilityGpu)
+			totalGpuAvailable += int(math.Round(gpuAvailable)) - MIG_PROFILES_7_RESOURCES_UNUSED[posGeometry]
 		}
 	}
 
@@ -353,7 +364,9 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 			gpuReq = maxAvailabilityGpu
 		}
 
-		if gpu.available < leastAvailableValue && gpu.available >= gpuReq {
+		var gpuLeft int = gpu.available - gpuReq
+
+		if gpu.available < leastAvailableValue && gpuLeft >= 0 {
 			leastAvailableValue = gpu.available
 			leastAvailableGpuPosition = gpuPosition
 			gpuAssgined = gpuReq

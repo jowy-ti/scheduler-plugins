@@ -211,8 +211,8 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	}
 
 	// scanPodUsage(pod.Name)
-	// scanNode(nodeName)
 	klog.V(0).Infof("Reserve node: %s", nodeName)
+	scanNode(nodeName)
 
 	return framework.NewStatus(framework.Success)
 }
@@ -261,7 +261,7 @@ func onDelete(obj interface{}) {
 			return
 		}
 	}
-	klog.V(0).Infof("Deleted pod: %s", pod.Name)
+	// klog.V(0).Infof("Deleted pod: %s", pod.Name)
 	podsUsage.cleanPodResources(pod.Name)
 }
 

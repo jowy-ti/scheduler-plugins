@@ -101,6 +101,35 @@ func (g *gpuSpec) setGpuSpecMigOnly(migInstance []*migInstance) error {
 	return nil
 }
 
+// Encuentra la geometria actual de la GPU con MIG
+func (g *gpuSpec) findGeometry() (geometry int, err error) {
+
+	if g.migLength <= 0 {
+		return -1, fmt.Errorf("gpuSpec.findGeometry: no se puede encontrar la geometría porque el valor de migLength es inválido")
+	}
+
+	for i := 0; MIG_7_ROWS > i; i++ {
+		var migInstance *migInstance
+		var geometryFinded bool = true
+
+		for j := 0; g.migLength > j; j += absInt(migInstance.size) {
+			migInstance = g.migInstances[j]
+
+			if MIG_PROFILES_7_INSTANCES[i][j] != migInstance.size {
+				// klog.V(0).Infof("test: %d", i)
+				geometryFinded = false
+				break
+			}
+		}
+		if geometryFinded {
+			// klog.V(0).Infof("Geometrydef: %d", i)
+			return i, nil
+		}
+	}
+
+	return -1, fmt.Errorf("gpuSpec.findGeometry: no se ha encontrado la geometría MIG para la gpu")
+}
+
 // Devuelve una lista de las posiciones MIG ocupadas para una GPU
 func (g *gpuSpec) partitionsOccuped() []int {
 
@@ -156,26 +185,26 @@ func (g *gpuSpec) evaluateGeometryRequestFit(geometryToEvaluate int, memReq int,
 	for i := 0; MIG_7_COLUMNS > i; i += absInt(migSizeGeometry) {
 		var migFp32 float64
 		var migMem float64
-		var migAvailable float64
+		var migAvailable int
 		migSizeGeometry = MIG_PROFILES_7_INSTANCES[geometryToEvaluate][i]
 
 		if g.migInstances[i] != nil && g.migInstances[i].size == migSizeGeometry {
 			var migInstance *migInstance = g.migInstances[i]
-			migAvailable = float64(migInstance.available)
+			migAvailable = migInstance.available
 			migFp32 = float64(migInstance.fp32)
 			migMem = float64(migInstance.mem)
 
-			if hardwareIsolation && migAvailable < float64(maxAvailabilityGpu) {
+			if hardwareIsolation && migAvailable < maxAvailabilityGpu {
 				continue
 			}
 
 		} else {
-			migAvailable = float64(maxAvailabilityGpu)
+			migAvailable = maxAvailabilityGpu
 			migFp32 = MIG_7_COMPUTE_FRACTION[migSizeGeometry] * float64(g.fp32)
 			migMem = MIG_7_MEMORY_FRACTION[migSizeGeometry] * float64(g.mem)
 		}
 
-		gpuFp32Left, gpuMemLeft := gpuResourcesAvailable(migAvailable, migFp32, migMem)
+		gpuFp32Left, gpuMemLeft := gpuResourcesAvailable(float64(migAvailable), migFp32, migMem)
 		// klog.V(0).Infof("geometryToEvaluate: %d", geometryToEvaluate)
 		// klog.V(0).Infof("gpuFp32Left: %d", gpuFp32Left)
 		// klog.V(0).Infof("gpuMemLeft: %d", gpuMemLeft)
