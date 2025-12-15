@@ -3,7 +3,6 @@ package myscheduler
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 	"time"
 
@@ -33,7 +32,6 @@ const (
 	scheduledAnnotation string             = "customresource.com/scheduled-time"
 	deletionAnnotation  string             = "customresource.com/deletion-time"
 	hardIsolation       string             = "hardIsolation"
-	exp                 float64            = 1.0 / 4.0
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -231,10 +229,9 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
-	var interval float64 = float64(deletionTime - scheduledTime)
-	var workloadTime int64 = int64(math.Pow(interval, exp))
-	var timeInt int = int(workloadTime + time.Now().Unix())
-	var timeStr string = strconv.Itoa(timeInt)
+	var interval int64 = deletionTime - scheduledTime
+	var timeInt int64 = interval + time.Now().Unix()
+	var timeStr string = strconv.Itoa(int(timeInt))
 	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, timeAssigned, timeStr)
 
 	_, err = m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
