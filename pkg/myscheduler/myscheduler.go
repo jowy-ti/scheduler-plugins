@@ -32,6 +32,7 @@ const (
 	scheduledAnnotation string             = "customresource.com/scheduled-time"
 	deletionAnnotation  string             = "customresource.com/deletion-time"
 	hardIsolation       string             = "hardIsolation"
+	GPU_POS_ANNOTATION  string             = "gpuPos"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -40,6 +41,7 @@ var podsUsage *podsGpuUsage = newPodsGpuUsage()
 type PreFilterState struct {
 	resources         framework.Resource
 	hardwareIsolation bool
+	assignation       int
 }
 
 func (s *PreFilterState) Clone() framework.StateData {
@@ -184,6 +186,7 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
+	var gpuAssigned int
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
@@ -199,17 +202,24 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	}
 
 	if !mig {
-		err = gpuReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
+		gpuAssigned, err = gpuReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	} else {
-		err = migReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
+		gpuAssigned, err = migReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	}
 
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
+	var newPreFilterState *PreFilterState = &PreFilterState{
+		resources:         preFilterState.resources,
+		hardwareIsolation: preFilterState.hardwareIsolation,
+		assignation:       gpuAssigned,
+	}
+
+	state.Write(preFilterStateKey, newPreFilterState)
+
 	// scanPodUsage(pod.Name)
-	klog.V(0).Infof("Reserve node: %s", nodeName)
 	scanNode(nodeName)
 
 	return framework.NewStatus(framework.Success)
@@ -229,10 +239,16 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 		return framework.NewStatus(framework.Error, err.Error())
 	}
 
+	preFilterState, err := getPreFilterState(state)
+
+	if err != nil {
+		return framework.NewStatus(framework.Unschedulable, "Fallo al leer 'preFilterState' en 'cycleState'")
+	}
+
 	var interval int64 = deletionTime - scheduledTime
 	var timeInt int64 = interval + time.Now().Unix()
 	var timeStr string = strconv.Itoa(int(timeInt))
-	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, timeAssigned, timeStr)
+	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s","%s":"%d"}}}`, timeAssigned, timeStr, GPU_POS_ANNOTATION, preFilterState.assignation)
 
 	_, err = m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 
