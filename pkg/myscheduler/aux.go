@@ -22,6 +22,8 @@ const (
 	invalidInstanceSize int             = -1
 	MIG_7_ROWS          int             = 19
 	MIG_7_COLUMNS       int             = 7
+	GPU_POS_ANNOTATION  string          = "gpuPos"
+	MIG_SIZE_ANNOTATION string          = "migSize"
 )
 
 var MIG_PROFILES_7_INSTANCES [MIG_7_ROWS][MIG_7_COLUMNS]int = [MIG_7_ROWS][MIG_7_COLUMNS]int{
@@ -326,12 +328,12 @@ func nodeGpusUsage(nodeName string) (int64, *framework.Status) {
 	return int64(res), framework.NewStatus(framework.Success)
 }
 
-func gpuReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (int, error) {
+func gpuReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (string, error) {
 
 	length, err := nodeGpus.getLength(nodeName)
 
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	var leastAvailableValue int = maxAvailabilityGpu + 1
@@ -344,7 +346,7 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, gpuPosition)
 
 		if err != nil {
-			return 0, err
+			return "", err
 		}
 
 		var gpuReq int = gpuResourcesRequest(fp32Req, float64(gpu.fp32), memReq, float64(gpu.mem))
@@ -363,19 +365,19 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 	}
 
 	if leastAvailableGpuPosition < 0 || leastAvailableGpuPosition >= length || gpuAssgined <= 0 {
-		return 0, fmt.Errorf("no se ha encontrado adecuadamente una gpu para realizar la reserva")
+		return "", fmt.Errorf("no se ha encontrado adecuadamente una gpu para realizar la reserva")
 	}
 
 	err = podsUsage.setPodResourcesGpuOnly(podName, nodeName, leastAvailableGpuPosition, gpuAssgined)
 
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
-	return leastAvailableGpuPosition, nil
+	return fmt.Sprintf(`"%s":"%d"`, GPU_POS_ANNOTATION, leastAvailableGpuPosition), nil
 }
 
-func migReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (int, error) {
+func migReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (string, error) {
 
 	var defMigUseReq int
 	var defGeometryRow int
@@ -386,14 +388,14 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	length, err := nodeGpus.getLength(nodeName)
 
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 
 	for gpuPosition := 0; length > gpuPosition; gpuPosition++ {
 		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, gpuPosition)
 
 		if err != nil {
-			return 0, err
+			return "", err
 		}
 
 		var partitionsInUse []int = gpu.partitionsOccuped()
@@ -419,13 +421,13 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	}
 
 	if defMigPosition < 0 || defMigPosition >= MIG_7_COLUMNS || defGpuPosition < 0 || defGpuPosition >= length || defGeometryRow < 0 || defGeometryRow >= MIG_7_ROWS || leastMigLeft < 0 || leastMigLeft > maxAvailabilityGpu+1 || leastGpuReq < 0 || leastGpuReq > maxAvailabilityGpu+1 {
-		return 0, fmt.Errorf("no se ha encontrado adecuadamente una instancia MIG para realizar la reserva")
+		return "", fmt.Errorf("no se ha encontrado adecuadamente una instancia MIG para realizar la reserva")
 	}
 
 	gpu, err := nodeGpus.getGeneralGpuResources(nodeName, defGpuPosition)
 
 	if err != nil {
-		return 0, err
+		return "", err
 	}
 	// klog.V(0).Info("Final results:")
 	// klog.V(0).Infof("- defGeometry: %d", defGeometryRow)
@@ -439,7 +441,7 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	nodeGpus.setSingleNodeGpu(gpu, nodeName, defGpuPosition)
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
 
-	return defGpuPosition, nil
+	return fmt.Sprintf(`"%s":"%d","%s":"%d"`, GPU_POS_ANNOTATION, defGpuPosition, MIG_SIZE_ANNOTATION, gpu.migInstances[defMigPosition].size), nil
 }
 
 func gpuResourcesAvailable(availability float64, gpuFp32 float64, gpuMem float64) (fp32Left int, memLeft int) {

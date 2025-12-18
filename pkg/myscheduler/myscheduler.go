@@ -32,7 +32,6 @@ const (
 	scheduledAnnotation string             = "customresource.com/scheduled-time"
 	deletionAnnotation  string             = "customresource.com/deletion-time"
 	hardIsolation       string             = "hardIsolation"
-	GPU_POS_ANNOTATION  string             = "gpuPos"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -41,7 +40,7 @@ var podsUsage *podsGpuUsage = newPodsGpuUsage()
 type PreFilterState struct {
 	resources         framework.Resource
 	hardwareIsolation bool
-	assignation       int
+	assignation       string
 }
 
 func (s *PreFilterState) Clone() framework.StateData {
@@ -186,7 +185,7 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
-	var gpuAssigned int
+	var gpuAssigned string
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
@@ -248,7 +247,7 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 	var interval int64 = deletionTime - scheduledTime
 	var timeInt int64 = interval + time.Now().Unix()
 	var timeStr string = strconv.Itoa(int(timeInt))
-	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s","%s":"%d"}}}`, timeAssigned, timeStr, GPU_POS_ANNOTATION, preFilterState.assignation)
+	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s",%s}}}`, timeAssigned, timeStr, preFilterState.assignation)
 
 	_, err = m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 
