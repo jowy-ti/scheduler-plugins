@@ -28,10 +28,11 @@ var _ framework.PreBindPlugin = &MyScheduler{}
 const (
 	preFilterStateKey   framework.StateKey = "PodResources"
 	Name                string             = "MyScheduler"
-	timeAssigned        string             = "deadline"
+	timePodAssigned     string             = "realDeletionTime"
 	scheduledAnnotation string             = "customresource.com/scheduled-time"
 	deletionAnnotation  string             = "customresource.com/deletion-time"
 	hardIsolation       string             = "hardIsolation"
+	podDurationName     string             = "schedulingDuration"
 )
 
 var nodeGpus *allNodesGpus = newAllNodesGpus()
@@ -41,6 +42,7 @@ type PreFilterState struct {
 	resources         framework.Resource
 	hardwareIsolation bool
 	assignation       string
+	startTime         time.Time
 }
 
 func (s *PreFilterState) Clone() framework.StateData {
@@ -106,6 +108,7 @@ func (m *MyScheduler) PreFilter(ctx context.Context, state *framework.CycleState
 	var preFilterState *PreFilterState = &PreFilterState{
 		resources:         *podRequests,
 		hardwareIsolation: hardwareIsolation,
+		startTime:         time.Now(),
 	}
 
 	state.Write(preFilterStateKey, preFilterState)
@@ -178,7 +181,6 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 
 	for i, nodeScore := range scores {
 		scores[i].Score = int64(float64(framework.MaxNodeScore) * (float64(nodeScore.Score) / float64(MaxScore)))
-		// klog.V(0).Infof("%s %s Normalize: %d", pod.Name, scores[i].Name, scores[i].Score)
 	}
 	return framework.NewStatus(framework.Success)
 }
@@ -214,6 +216,7 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 		resources:         preFilterState.resources,
 		hardwareIsolation: preFilterState.hardwareIsolation,
 		assignation:       gpuAssigned,
+		startTime:         preFilterState.startTime,
 	}
 
 	state.Write(preFilterStateKey, newPreFilterState)
@@ -245,9 +248,10 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 	}
 
 	var interval int64 = deletionTime - scheduledTime
-	var timeInt int64 = interval + time.Now().Unix()
-	var timeStr string = strconv.Itoa(int(timeInt))
-	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s",%s}}}`, timeAssigned, timeStr, preFilterState.assignation)
+	var finalTimeInt int64 = interval + time.Now().Unix()
+	var finaTimeStr string = strconv.Itoa(int(finalTimeInt))
+	var schedulingDuration int = int(time.Since(preFilterState.startTime).Milliseconds())
+	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%d","%s":"%s",%s}}}`, podDurationName, schedulingDuration, timePodAssigned, finaTimeStr, preFilterState.assignation)
 
 	_, err = m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 

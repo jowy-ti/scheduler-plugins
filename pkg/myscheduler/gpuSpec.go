@@ -3,9 +3,27 @@ package myscheduler
 import (
 	"fmt"
 	"sync"
+	"time"
 
+	"k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
+
+var INSTANCE_CREATION_TIME = map[int]float64{
+	1: 0.16,
+	2: 0.21,
+	3: 0.33,
+	4: 0.38,
+	7: 0.42,
+}
+
+var INSTANCE_DESTRUCTION_TIME = map[int]float64{
+	1: 0.21,
+	2: 0.23,
+	3: 0.25,
+	4: 0.26,
+	7: 0.26,
+}
 
 // Informacion de GPU
 type gpuSpec struct {
@@ -116,13 +134,11 @@ func (g *gpuSpec) findGeometry() (geometry int, err error) {
 			migInstance = g.migInstances[j]
 
 			if MIG_PROFILES_7_INSTANCES[i][j] != migInstance.size {
-				// klog.V(0).Infof("test: %d", i)
 				geometryFinded = false
 				break
 			}
 		}
 		if geometryFinded {
-			// klog.V(0).Infof("Geometrydef: %d", i)
 			return i, nil
 		}
 	}
@@ -205,9 +221,6 @@ func (g *gpuSpec) evaluateGeometryRequestFit(geometryToEvaluate int, memReq int,
 		}
 
 		gpuFp32Left, gpuMemLeft := gpuResourcesAvailable(float64(migAvailable), migFp32, migMem)
-		// klog.V(0).Infof("geometryToEvaluate: %d", geometryToEvaluate)
-		// klog.V(0).Infof("gpuFp32Left: %d", gpuFp32Left)
-		// klog.V(0).Infof("gpuMemLeft: %d", gpuMemLeft)
 
 		if gpuMemLeft >= memReq && gpuFp32Left >= fp32Req {
 			return true
@@ -266,7 +279,6 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 
 	for i := 0; geometriesLength > i; i++ {
 		var geometryPos int = geometries[i]
-		// klog.V(0).Infof("Geometry: %d", geometryPos)
 		var migSizeGeometry int
 
 		for j := 0; MIG_7_COLUMNS > j; j += absInt(migSizeGeometry) {
@@ -289,7 +301,7 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 				migFp32 = MIG_7_COMPUTE_FRACTION[migSizeGeometry] * float64(g.fp32)
 				migMem = MIG_7_MEMORY_FRACTION[migSizeGeometry] * float64(g.mem)
 			}
-			// klog.V(0).Infof("- migInstance: %d", j)
+
 			var migReq int = gpuResourcesRequest(fp32Req, migFp32, memReq, migMem)
 
 			if hardwareIsolation && migReq < maxAvailabilityGpu {
@@ -301,11 +313,9 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 			if migLeft < 0 {
 				continue
 			}
-			// klog.V(0).Infof("  - migReq: %d", migReq)
+
 			// Se calcula el uso de GPU en base al de la partición mig y se suma la porción que no es posible utilizar debido a la geometría
 			var gpuReq int = migResourcesToGpuResources(float64(migReq), migFp32, migMem, float64(g.fp32), float64(g.mem)) + MIG_PROFILES_7_RESOURCES_UNUSED[geometryPos]
-			// klog.V(0).Infof("  - gpuReq: %d", gpuReq)
-			// klog.V(0).Infof("  - migLeft: %d", migLeft)
 
 			if leastGpuReq > gpuReq || (leastGpuReq == gpuReq && leastMigLeft > migLeft) {
 				leastGpuReq = gpuReq
@@ -321,33 +331,43 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 
 func (g *gpuSpec) reconfiguration(geometryRow int) {
 
+	var waitTime float64 = 0
 	var geometry [MIG_7_COLUMNS]int = MIG_PROFILES_7_INSTANCES[geometryRow]
 	var migGeometry []*migInstance = make([]*migInstance, MIG_7_COLUMNS)
 	var migSizeGeometry int
 
 	for i := 0; MIG_7_COLUMNS > i; i += absInt(migSizeGeometry) {
-		var migMemory float64
-		var migFp32 float64
 		var availability int
+		var migInstance *migInstance = g.migInstances[i]
 		migSizeGeometry = geometry[i]
 
 		if migSizeGeometry == invalidInstanceSize {
 			continue
 		}
 
-		if g.migInstances[i] != nil && migSizeGeometry == g.migInstances[i].size {
-			availability = g.migInstances[i].available
+		if migInstance != nil && migSizeGeometry == migInstance.size {
+			availability = migInstance.available
 		} else {
 			availability = maxAvailabilityGpu
+			waitTime += INSTANCE_CREATION_TIME[migSizeGeometry]
+			if migInstance != nil {
+				for j := i; i+migSizeGeometry > j; j++ {
+					if g.migInstances[j] != nil {
+						waitTime += INSTANCE_DESTRUCTION_TIME[g.migInstances[j].size]
+					}
+				}
+			}
 		}
 
-		migMemory = float64(g.mem) * MIG_7_MEMORY_FRACTION[migSizeGeometry]
-		migFp32 = float64(g.fp32) * MIG_7_COMPUTE_FRACTION[migSizeGeometry]
+		var migMemory float64 = float64(g.mem) * MIG_7_MEMORY_FRACTION[migSizeGeometry]
+		var migFp32 float64 = float64(g.fp32) * MIG_7_COMPUTE_FRACTION[migSizeGeometry]
 
 		migGeometry[i] = newMigInstance()
 		migGeometry[i].setInfoMigInstance(migSizeGeometry, int(migMemory), int(migFp32), availability)
 	}
 	g.setGpuSpecMigOnly(migGeometry)
+	klog.V(0).Infof("WaitTime: %f", waitTime)
+	time.Sleep(time.Duration(waitTime * float64(time.Second)))
 }
 
 // Unicamente usar los siguientes métodos en estructuras locales EOF
