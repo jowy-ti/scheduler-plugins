@@ -3,6 +3,7 @@ package myscheduler
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -43,6 +43,7 @@ type PreFilterState struct {
 	hardwareIsolation bool
 	assignation       string
 	startTime         time.Time
+	waitTime          float64
 }
 
 func (s *PreFilterState) Clone() framework.StateData {
@@ -158,7 +159,7 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 func (m *MyScheduler) Score(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) (int64, *framework.Status) {
 
 	score, status := nodeGpusUsage(nodeName)
-	klog.V(0).Infof("%s score: %d", nodeName, score)
+	// klog.V(0).Infof("%s score: %d", nodeName, score)
 	return score, status
 }
 
@@ -188,6 +189,7 @@ func (m *MyScheduler) NormalizeScore(ctx context.Context, state *framework.Cycle
 func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, pod *v1.Pod, nodeName string) *framework.Status {
 
 	var gpuAssigned string
+	var podWaitTime float64
 	preFilterState, err := getPreFilterState(state)
 
 	if err != nil {
@@ -205,7 +207,7 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 	if !mig {
 		gpuAssigned, err = gpuReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	} else {
-		gpuAssigned, err = migReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
+		podWaitTime, gpuAssigned, err = migReservation(pod.Name, nodeName, podRequests, hardwareIsolation)
 	}
 
 	if err != nil {
@@ -217,12 +219,14 @@ func (m *MyScheduler) Reserve(ctx context.Context, state *framework.CycleState, 
 		hardwareIsolation: preFilterState.hardwareIsolation,
 		assignation:       gpuAssigned,
 		startTime:         preFilterState.startTime,
+		waitTime:          podWaitTime,
 	}
 
 	state.Write(preFilterStateKey, newPreFilterState)
 
 	// scanPodUsage(pod.Name)
-	scanNode(nodeName)
+	// scanNode(nodeName)
+	// klog.V(0).Infof("Reserve: %s", nodeName)
 
 	return framework.NewStatus(framework.Success)
 }
@@ -248,16 +252,20 @@ func (m *MyScheduler) PreBind(ctx context.Context, state *framework.CycleState, 
 	}
 
 	var interval int64 = deletionTime - scheduledTime
-	var finalTimeInt int64 = interval + time.Now().Unix()
-	var finaTimeStr string = strconv.Itoa(int(finalTimeInt))
-	var schedulingDuration int = int(time.Since(preFilterState.startTime).Milliseconds())
-	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%d","%s":"%s",%s}}}`, podDurationName, schedulingDuration, timePodAssigned, finaTimeStr, preFilterState.assignation)
+	var finalTimeInt int64 = interval + time.Now().Unix() + int64(math.Ceil(preFilterState.waitTime))
+	// var finaTimeStr string = strconv.Itoa(int(finalTimeInt))
+	var schedulingDuration int = int(time.Since(preFilterState.startTime).Microseconds())
+	// klog.V(0).Infof("SchedulingTime: %v", time.Since(preFilterState.startTime))
+
+	var patchPayload string = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%d","%s":"%d",%s}}}`, podDurationName, schedulingDuration, timePodAssigned, finalTimeInt, preFilterState.assignation)
 
 	_, err = m.k8sClient.CoreV1().Pods(pod.Namespace).Patch(ctx, pod.Name, types.StrategicMergePatchType, []byte(patchPayload), metav1.PatchOptions{})
 
 	if err != nil {
 		return framework.NewStatus(framework.Error, err.Error())
 	}
+
+	// time.Sleep(time.Duration(preFilterState.waitTime * float64(time.Second)))
 
 	return framework.NewStatus(framework.Success)
 }

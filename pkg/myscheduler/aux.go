@@ -355,7 +355,6 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 		if hardwareIsolation && gpuReq < maxAvailabilityGpu {
 			gpuReq = maxAvailabilityGpu
 		}
-
 		var gpuLeft int = gpu.available - gpuReq
 
 		if gpu.available < leastAvailableValue && gpuLeft >= 0 {
@@ -378,7 +377,7 @@ func gpuReservation(podName string, nodeName string, podRequests *framework.Reso
 	return fmt.Sprintf(`"%s":"%d","%s":"%d"`, GPU_POS_ANNOTATION, leastAvailableGpuPosition, MIG_SIZE_ANNOTATION, NO_MIG_INSTANCE_ASSIGNED), nil
 }
 
-func migReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (string, error) {
+func migReservation(podName string, nodeName string, podRequests *framework.Resource, hardwareIsolation bool) (float64, string, error) {
 
 	var defMigUseReq int
 	var defGeometryRow int
@@ -389,14 +388,14 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	length, err := nodeGpus.getLength(nodeName)
 
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 
 	for gpuPosition := 0; length > gpuPosition; gpuPosition++ {
 		gpu, err := nodeGpus.getGeneralGpuResources(nodeName, gpuPosition)
 
 		if err != nil {
-			return "", err
+			return 0, "", err
 		}
 
 		var partitionsInUse []int = gpu.partitionsOccuped()
@@ -416,20 +415,20 @@ func migReservation(podName string, nodeName string, podRequests *framework.Reso
 	}
 
 	if defMigPosition < 0 || defMigPosition >= MIG_7_COLUMNS || defGpuPosition < 0 || defGpuPosition >= length || defGeometryRow < 0 || defGeometryRow >= MIG_7_ROWS || leastMigLeft < 0 || leastMigLeft > maxAvailabilityGpu+1 || leastGpuReq < 0 || leastGpuReq > maxAvailabilityGpu+1 {
-		return "", fmt.Errorf("no se ha encontrado adecuadamente una instancia MIG para realizar la reserva")
+		return 0, "", fmt.Errorf("no se ha encontrado adecuadamente una instancia MIG para realizar la reserva")
 	}
 
 	gpu, err := nodeGpus.getGeneralGpuResources(nodeName, defGpuPosition)
 
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 
-	gpu.reconfiguration(defGeometryRow)
+	var waitTime float64 = gpu.reconfiguration(defGeometryRow)
 	nodeGpus.setSingleNodeGpu(gpu, nodeName, defGpuPosition)
 	podsUsage.setPodResourcesMigOnly(podName, nodeName, defGpuPosition, defMigPosition, defMigUseReq)
 
-	return fmt.Sprintf(`"%s":"%d","%s":"%d"`, GPU_POS_ANNOTATION, defGpuPosition, MIG_SIZE_ANNOTATION, gpu.migInstances[defMigPosition].size), nil
+	return waitTime, fmt.Sprintf(`"%s":"%d","%s":"%d"`, GPU_POS_ANNOTATION, defGpuPosition, MIG_SIZE_ANNOTATION, gpu.migInstances[defMigPosition].size), nil
 }
 
 func gpuResourcesAvailable(availability float64, gpuFp32 float64, gpuMem float64) (fp32Left int, memLeft int) {

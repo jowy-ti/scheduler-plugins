@@ -3,9 +3,7 @@ package myscheduler
 import (
 	"fmt"
 	"sync"
-	"time"
 
-	"k8s.io/klog/v2"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
 
@@ -329,7 +327,7 @@ func (g *gpuSpec) bestGeometryForMig7(geometries []int, podRequests *framework.R
 	return defGeometry, defMigPosition, leastMigLeft, leastGpuReq, defMigReq
 }
 
-func (g *gpuSpec) reconfiguration(geometryRow int) {
+func (g *gpuSpec) reconfiguration(geometryRow int) float64 {
 
 	var waitTime float64 = 0
 	var geometry [MIG_7_COLUMNS]int = MIG_PROFILES_7_INSTANCES[geometryRow]
@@ -366,8 +364,8 @@ func (g *gpuSpec) reconfiguration(geometryRow int) {
 		migGeometry[i].setInfoMigInstance(migSizeGeometry, int(migMemory), int(migFp32), availability)
 	}
 	g.setGpuSpecMigOnly(migGeometry)
-	klog.V(0).Infof("WaitTime: %f", waitTime)
-	time.Sleep(time.Duration(waitTime * float64(time.Second)))
+	// klog.V(0).Infof("WaitTime: %f", waitTime)
+	return waitTime
 }
 
 // Unicamente usar los siguientes métodos en estructuras locales EOF
