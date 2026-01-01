@@ -12,7 +12,6 @@ import (
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	framework "k8s.io/kubernetes/pkg/scheduler/framework"
 )
@@ -53,7 +52,7 @@ func (s *PreFilterState) Clone() framework.StateData {
 // Plugin
 type MyScheduler struct {
 	handle    framework.Handle
-	k8sClient *kubernetes.Clientset
+	k8sClient kubernetes.Interface
 }
 
 func (m *MyScheduler) Name() string {
@@ -70,20 +69,10 @@ func New(_ context.Context, _ runtime.Object, h framework.Handle) (framework.Plu
 			DeleteFunc: onDelete,
 		},
 	})
-	// Inicializar la configuración de Kubernetes
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("error al obtener la configuración in-cluster: %w", err)
-	}
-	// Crear el cliente de la API K8s
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("error al crear el cliente de K8s: %w", err)
-	}
 
 	return &MyScheduler{
 		handle:    h,
-		k8sClient: clientset,
+		k8sClient: h.ClientSet(),
 	}, nil
 }
 
@@ -132,7 +121,8 @@ func (m *MyScheduler) Filter(ctx context.Context, state *framework.CycleState, p
 	var nodeName string = nodeInfo.GetName()
 	var gpuCount int = int(nodeInfo.Allocatable.ScalarResources[gpuResourceName])
 	var nodeLabels map[string]string = nodeInfo.Node().Labels
-	_, ok := nodeGpus.nodes[nodeName]
+
+	ok := nodeGpus.nodeExists(nodeName)
 
 	if !ok {
 		memoryGpu, fp32Gpu, numInstances, err := extractNodeInfo(nodeLabels, nodeName)

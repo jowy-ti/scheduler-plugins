@@ -56,6 +56,15 @@ func (p *allNodesGpus) getLength(nodeName string) (int, error) {
 	return len(gpus), nil
 }
 
+// Devuelve si existe el nodo
+func (p *allNodesGpus) nodeExists(nodeName string) bool {
+	p.Lock()
+	defer p.Unlock()
+	_, ok := p.nodes[nodeName]
+	return ok
+}
+
+// Información de la gpu
 func (p *allNodesGpus) getGeneralGpuResources(nodeName string, gpuPosition int) (g *gpuSpec, err error) {
 
 	gpu, err := p.getGpu(nodeName, gpuPosition)
